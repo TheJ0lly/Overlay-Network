@@ -1,0 +1,32 @@
+Create the Node structure:
+    S - Maybe an unique ID(hash/uint64/username) to catch IP changes for existing users
+    S - A list of connected nodes
+    S - Maximum number of allowed nodes, so that you cannot surpass the user set limit
+    S - A field with IP
+    S - A bool with alive state
+    U - A queue, with incoming messages, not yet handled
+    U - Node visibility depth number, meaning how many layers of nodes can you see over the primary connections
+
+For the Node structure:
+    - Serialization (JSON, XML, Protobuf(Need to learn how))
+    - Connect/Listen methods
+    - User configuration file/CLI flags
+    - Network state serialization(separate file)
+    - Send
+
+
+
+For incoming messages, we create a goroutine that takes in as a parameter the current node(or maybe the queue pointer), and it will queue messages.
+In the main loop, the received messages will be handled.
+    - The messages will have different actions types:
+        > Update    - just modify things, and forward to the rest of nodes, apart from the sender node
+        > Query     - look for a resource, IP, username
+
+        > Or maybe we have an interface, Message, and there will be more specific messages types such as:
+
+        > NewNodeJoin
+        > ExistentNodeJoin
+        > UpdateNodeConnectionsStatus
+        > ...
+
+Create some Flow Diagrams so that we know what is happening.
