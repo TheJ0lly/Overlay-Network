@@ -6,6 +6,7 @@ Create the Node structure:
     S - A bool with alive state
     U - A queue, with incoming messages, not yet handled
     U - Node visibility depth number, meaning how many layers of nodes can you see over the primary connections
+    U - Processing Message
 
 For the Node structure:
     - Serialization (JSON, XML, Protobuf(Need to learn how))
@@ -14,6 +15,8 @@ For the Node structure:
     - Network state serialization(separate file)
     - Send
 
+
+Look into logging capabilities in the STD, or create a small logging utility package
 
 
 For incoming messages, we create a goroutine that takes in as a parameter the current node(or maybe the queue pointer), and it will queue messages.
