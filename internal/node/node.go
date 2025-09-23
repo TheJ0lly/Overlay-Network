@@ -1,8 +1,10 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"log/slog"
 	"net"
 
@@ -15,38 +17,57 @@ import (
 // TODO: Maybe in the future we will create another type of node for the PrimaryConnections node,
 // in which we do not have Queue, Depth, and ProcessingMessage
 type Node struct {
-	Username            string  `json:"Username"`
-	Connections         []*Node `json:"Connections"`
-	ConnectionsCapacity uint16  `json:"ConnectionsCapacity"`
-	IP                  net.IP  `json:"IP"`
-	IsAlive             bool    `json:"IsAlive"`
-	Queue               *queue.MessageQueue
-	Depth               uint8
-	ProcessingMessage   bool
-	// REMOVE THIS WHEN MAKING THE NETWORK TEST SUITE
-	KeepRunning bool
+	Username            string              `json:"Username"`
+	Connections         []*Node             `json:"Connections"`
+	ConnectionsCapacity uint16              `json:"ConnectionsCapacity"`
+	IP                  net.IP              `json:"IP"`
+	IsAlive             bool                `json:"IsAlive"`
+	Queue               *queue.MessageQueue `json:"-"`
+	Depth               uint8               `json:"-"`
 }
 
-// NodeLoop represents the main loop of the current active node. It will handle everything, from incoming/queued messages to state changes.
-func (currentNode *Node) NodeLoop() {
-	for currentNode.KeepRunning {
-		if currentNode.ProcessingMessage || currentNode.Queue.IsEmpty() {
-			continue
+// Create creates and returns a Node. In the case where the IP is invalid the function will return nil.
+func Create(username string, ip string, connCap uint16) *Node {
+	parsedIp := net.ParseIP(ip)
+	if parsedIp == nil {
+		log.Printf("IP used to create node is invalid: %s", ip)
+		return nil
+	}
+
+	if connCap < 1 {
+		log.Print("connection capacity is set to 0")
+		return nil
+	}
+
+	return &Node{Username: username, IP: parsedIp, ConnectionsCapacity: connCap, Queue: queue.Create(connCap)}
+}
+
+// RunNodeLoop represents the main loop of the current active node. It will handle everything, from incoming/queued messages to state changes.
+//
+// IT SHOULD BE RUN AS A GOROUTINE. USE `GO` BEFORE THE CALL :)
+func (currentNode *Node) RunNodeLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-currentNode.Queue.Notify:
+			for {
+				envelope, exists := currentNode.Queue.GetNext()
+				if !exists {
+					break
+				}
+				currentNode.processMessage(&envelope)
+			}
 		}
-		// Here there may be some logic changes, based on different actions, so as of now we will leave it like this, even though it seems pointless :)
-		// BUT, it is explicit
-		envelope := currentNode.Queue.GetNext()
-		currentNode.processMessage(&envelope)
 	}
 }
 
 // processMessage will take the message envelope and based on the type inside the envelope, it will handle the message accordingly.
 func (currentNode *Node) processMessage(envelope *message.MessageEnvelope) {
+	log.Printf("processing next message of type: %s", envelope.Type.String())
 	switch envelope.Type {
 	case message.NewNodeJoinType:
 		currentNode.processNewNodeJoinMessage(envelope)
-		currentNode.KeepRunning = false
-
 	default:
 		slog.Warn(fmt.Sprintf("unknown message type with value: %d", envelope.Type))
 	}
@@ -64,7 +85,7 @@ func addNode(existingNode *Node, newNodeData []byte) {
 }
 
 // findNodeInConnectionsByUsername will search through all the nodes reachable from the current node, meaning the primary connections and their respective primary connections.
-// Return, if found, the node that matches the username we look for
+// Return, if found, the node that matches the username we look for, otherwise `nil`.
 func (currentNode *Node) findNodeInConnectionsByUsername(username string) *Node {
 	for _, otherNode := range currentNode.Connections {
 		if otherNode.Username == username {
