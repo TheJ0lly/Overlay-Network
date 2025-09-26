@@ -3,6 +3,7 @@ import os
 from enum import Enum
 import sys
 import re
+import argparse
 
 class Color(Enum):
     WHITE=30
@@ -90,17 +91,48 @@ def coverage():
         log_error("failed to remove the original coverage report")
         os._exit(1)
 
+def unit_testing(verbose: bool):
+    subprocess.run(["go", "clean", "-fuzzcache"])
+    subprocess.run(["go", "clean", "-testcache"])
+    subprocess.run(["go", "clean", "-cache"])
 
-if len(sys.argv) != 2:
-    log_error("build script requires one argument:\n\tbuild\n\tclean\n\ttest(not working yet :))")
-    os._exit(1)
+    cmd = ["go", "test", "./..."]
 
-match sys.argv[1]:
-    case "build":
-        build()
-    case "clean":
-        clean()
-    case "coverage":
-        coverage()
-    case "test":
-        print("testing not working yet")
+    if verbose:
+        cmd.append("-v")
+
+    status = subprocess.run(cmd)
+    if status.returncode != 0:
+        log_error("failed to run the unit tests")
+        os._exit(1)
+
+
+parser = argparse.ArgumentParser(prog="Overlay-Network control script",
+                                 description="This script helps with building/cleaning the binaries, generating coverage reports, and testing, both UT's and simulations(not yet)")
+parser.add_argument("-build", action="store_true")
+parser.add_argument("-clean", action="store_true")
+parser.add_argument("-cover", action="store_true")
+
+testing_sub_parser = parser.add_subparsers(dest="testmode")
+test_parser = testing_sub_parser.add_parser("test", help="run tests")
+test_parser.add_argument("type", choices=["ut", "nt"], help="ut(Unit Testing) | nt(Network Testing)")
+test_parser.add_argument("-v", "--verbose", action="store_true", help="enables verbose output")
+
+
+parser.add_argument("-test", type=str, help="the only available choices are: ut(Unit Tests)/nt(Network Tests)")
+
+args = parser.parse_args()
+
+if args.build:
+    build()
+elif args.clean:
+    clean()
+elif args.cover:
+    coverage()
+elif args.testmode == "test":
+    if args.type == "ut":
+        unit_testing(args.verbose)
+    elif args.type == "nt":
+        print("not working yet")
+    else:
+        print("unknown test flag value")
