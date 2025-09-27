@@ -1,0 +1,22 @@
+
+networks:
+  OverlayNetwork:
+    driver: bridge
+
+services:
+  node1:
+    build: .
+    container_name: node1
+    networks:
+      - OverlayNetwork
+    ports:
+      - "8080:8080"
+
+  node2:
+    build: .
+    container_name: node2
+    networks:
+      - OverlayNetwork
+    ports:
+      - "8090:8090"
+

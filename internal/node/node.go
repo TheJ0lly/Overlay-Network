@@ -24,6 +24,7 @@ type Node struct {
 	IsAlive             bool                `json:"IsAlive"`
 	Queue               *queue.MessageQueue `json:"-"`
 	Depth               uint8               `json:"-"`
+	Stop                chan struct{}       `json:"-"`
 }
 
 // Create creates and returns a Node. In the case where the IP is invalid the function will return nil.
@@ -49,6 +50,7 @@ func (currentNode *Node) RunNodeLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			currentNode.Stop <- struct{}{}
 			return
 		case <-currentNode.Queue.Notify:
 			for {

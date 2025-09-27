@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
-	"time"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
 	"github.com/TheJ0lly/Overlay-Network/internal/node"
@@ -48,16 +51,21 @@ func main() {
 		Data: b,
 	}
 
+	signalChan := make(chan os.Signal, 1)
+
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+
 	currentNode.Queue.Add(env)
 
 	ctx, cancelFunc := context.WithCancelCause(context.Background())
 	go currentNode.RunNodeLoop(ctx)
 
-	time.Sleep(5 * time.Second)
-	cancelFunc(fmt.Errorf("no error, simply done :)"))
-
-	fmt.Println(context.Cause(ctx))
-
-	fmt.Println(currentNode.Queue.Empty())  // true
-	fmt.Println(currentNode.Connections[0]) // Node2
+	select {
+	case <-currentNode.Stop:
+		// For the other CLI tool which will come in the future,
+		// that will send a message through localhost that ends the node, so that we do not need to kill it from task manager
+	case rcvSig := <-signalChan:
+		log.Printf("operating system signal received: %s - shutting down\n", rcvSig)
+		cancelFunc(fmt.Errorf("os signal received"))
+	}
 }
