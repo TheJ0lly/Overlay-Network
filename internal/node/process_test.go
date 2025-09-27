@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/networkmessage"
 )
 
 func TestProcessFunctionForNewNodeJoinMessageWhereCurrentNodeIsTheOneAttachedTo(t *testing.T) {
@@ -19,7 +19,7 @@ func TestProcessFunctionForNewNodeJoinMessageWhereCurrentNodeIsTheOneAttachedTo(
 		t.Fatalf("marshaling error for mock node: %s", err)
 	}
 
-	msg := message.NewNodeJoinMessage{
+	msg := networkmessage.NewNodeJoinMessage{
 		ExistingNodeUsername: "Node1",
 		NodeData:             b,
 	}
@@ -28,8 +28,8 @@ func TestProcessFunctionForNewNodeJoinMessageWhereCurrentNodeIsTheOneAttachedTo(
 	if err != nil {
 		t.Fatalf("marshaling error for message content: %s", err)
 	}
-	env := message.MessageEnvelope{
-		Type: message.NewNodeJoinType,
+	env := networkmessage.MessageEnvelope{
+		Type: networkmessage.NewNodeJoinType,
 		Data: b,
 	}
 
@@ -52,7 +52,7 @@ func TestProcessFunctionForNewNodeJoinMessageWhereMessageTypeIsInvalid(t *testin
 		t.Fatalf("marshaling error for mock node: %s", err)
 	}
 
-	msg := message.NewNodeJoinMessage{
+	msg := networkmessage.NewNodeJoinMessage{
 		ExistingNodeUsername: "Node1",
 		NodeData:             b,
 	}
@@ -61,7 +61,7 @@ func TestProcessFunctionForNewNodeJoinMessageWhereMessageTypeIsInvalid(t *testin
 	if err != nil {
 		t.Fatalf("marshaling error for message content: %s", err)
 	}
-	env := message.MessageEnvelope{
+	env := networkmessage.MessageEnvelope{
 		Type: 255,
 		Data: b,
 	}
@@ -89,7 +89,7 @@ func TestProcessFunctionForNewNodeJoinMessageWhereConnectionNodeIsTheOneAttached
 		t.Fatalf("marshaling error for mock node: %s", err)
 	}
 
-	msg := message.NewNodeJoinMessage{
+	msg := networkmessage.NewNodeJoinMessage{
 		ExistingNodeUsername: "Node3",
 		NodeData:             b,
 	}
@@ -98,8 +98,8 @@ func TestProcessFunctionForNewNodeJoinMessageWhereConnectionNodeIsTheOneAttached
 	if err != nil {
 		t.Fatalf("marshaling error for message content: %s", err)
 	}
-	env := message.MessageEnvelope{
-		Type: message.NewNodeJoinType,
+	env := networkmessage.MessageEnvelope{
+		Type: networkmessage.NewNodeJoinType,
 		Data: b,
 	}
 

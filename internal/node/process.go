@@ -4,16 +4,15 @@ package node
 // I decided to move them here for clarity and modularization of code.
 
 import (
-	"fmt"
-	"log/slog"
+	"log"
 
-	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/networkmessage"
 )
 
-func (currentNode *Node) processNewNodeJoinMessage(envelope *message.MessageEnvelope) {
-	var msg message.NewNodeJoinMessage
+func (currentNode *Node) processNewNodeJoinMessage(envelope *networkmessage.MessageEnvelope) {
+	var msg networkmessage.NewNodeJoinMessage
 	if err := envelope.GetMessageContent(&msg); err != nil {
-		slog.Warn(fmt.Sprintf("cannot get the content of NewNodeJoinMessage: %s", err))
+		log.Printf("cannot get the content of NewNodeJoinMessage: %s", err)
 		return
 	}
 

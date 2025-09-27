@@ -3,22 +3,22 @@ package queue
 import (
 	"log"
 
-	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/networkmessage"
 )
 
 type MessageQueue struct {
 	Notify   chan struct{}
-	messages []message.MessageEnvelope
+	messages []networkmessage.MessageEnvelope
 }
 
 func Create(cap uint16) *MessageQueue {
-	return &MessageQueue{Notify: make(chan struct{}, 1), messages: make([]message.MessageEnvelope, 0, cap)}
+	return &MessageQueue{Notify: make(chan struct{}, 1), messages: make([]networkmessage.MessageEnvelope, 0, cap)}
 }
 
 // Add function adds an incoming message envelope into the queue if there is space for it, otherwise it will discard it.
-func (mq *MessageQueue) Add(msg message.MessageEnvelope) {
+func (mq *MessageQueue) Add(msg networkmessage.MessageEnvelope) {
 	if len(mq.messages)+1 > cap(mq.messages) {
-		log.Printf("message queue is full, cannot queue message with type: %s\n", msg.Type.String())
+		log.Printf("message queue is full, cannot queue message with type: %s", msg.Type.String())
 		return
 	}
 	mq.messages = append(mq.messages, msg)
@@ -39,9 +39,9 @@ func (mq *MessageQueue) Empty() bool {
 }
 
 // GetNext returns the next message to be processed in the queue and a bool that signals if the queue was empty and returned zero-valued envelope.
-func (mq *MessageQueue) GetNext() (message.MessageEnvelope, bool) {
+func (mq *MessageQueue) GetNext() (networkmessage.MessageEnvelope, bool) {
 	if mq.Empty() {
-		return message.MessageEnvelope{}, false
+		return networkmessage.MessageEnvelope{}, false
 	}
 	toret := mq.messages[0]
 	mq.messages = mq.messages[1:]

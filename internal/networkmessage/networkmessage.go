@@ -1,4 +1,4 @@
-package message
+package networkmessage
 
 import (
 	"encoding/json"

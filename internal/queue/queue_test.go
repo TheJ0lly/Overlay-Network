@@ -3,7 +3,7 @@ package queue
 import (
 	"testing"
 
-	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/networkmessage"
 )
 
 func createTestQueue(capacity uint16) *MessageQueue {
@@ -28,7 +28,7 @@ func TestEmptyWithNoMessage(t *testing.T) {
 
 func TestEmptyWithOneMessage(t *testing.T) {
 	mq := createTestQueue(1)
-	env := message.MessageEnvelope{}
+	env := networkmessage.MessageEnvelope{}
 
 	mq.Add(env)
 
@@ -39,7 +39,7 @@ func TestEmptyWithOneMessage(t *testing.T) {
 
 func TestAddOneMessageWithCapacityOne(t *testing.T) {
 	mq := createTestQueue(1)
-	env := message.MessageEnvelope{}
+	env := networkmessage.MessageEnvelope{}
 	mq.Add(env)
 
 	if mq.Empty() {
@@ -49,8 +49,8 @@ func TestAddOneMessageWithCapacityOne(t *testing.T) {
 
 func TestAddTwoMessagesWithCapacityOne(t *testing.T) {
 	mq := createTestQueue(1)
-	env1 := message.MessageEnvelope{}
-	env2 := message.MessageEnvelope{}
+	env1 := networkmessage.MessageEnvelope{}
+	env2 := networkmessage.MessageEnvelope{}
 	mq.Add(env1)
 	mq.Add(env2)
 
@@ -65,7 +65,7 @@ func TestAddTwoMessagesWithCapacityOne(t *testing.T) {
 
 func TestGetNextWithOneMessage(t *testing.T) {
 	mq := createTestQueue(1)
-	env := message.MessageEnvelope{}
+	env := networkmessage.MessageEnvelope{}
 	mq.Add(env)
 
 	_, exists := mq.GetNext()

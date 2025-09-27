@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/networkmessage"
 )
 
 func TestCreate(t *testing.T) {
@@ -76,7 +76,7 @@ func TestProcessMessageWithUnknownMessage(t *testing.T) {
 		t.Fatalf("marshaling error for mock node: %s", err)
 	}
 
-	msg := message.NewNodeJoinMessage{
+	msg := networkmessage.NewNodeJoinMessage{
 		ExistingNodeUsername: "Node1",
 		NodeData:             b,
 	}
@@ -85,7 +85,7 @@ func TestProcessMessageWithUnknownMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshaling error for message content: %s", err)
 	}
-	env := message.MessageEnvelope{
+	env := networkmessage.MessageEnvelope{
 		Type: 255,
 		Data: b,
 	}
@@ -114,7 +114,7 @@ func TestProcessMessageWithNewNodeJoinMessage(t *testing.T) {
 		t.Fatalf("marshaling error for mock node: %s", err)
 	}
 
-	msg := message.NewNodeJoinMessage{
+	msg := networkmessage.NewNodeJoinMessage{
 		ExistingNodeUsername: "Node1",
 		NodeData:             b,
 	}
@@ -123,8 +123,8 @@ func TestProcessMessageWithNewNodeJoinMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshaling error for message content: %s", err)
 	}
-	env := message.MessageEnvelope{
-		Type: message.NewNodeJoinType,
+	env := networkmessage.MessageEnvelope{
+		Type: networkmessage.NewNodeJoinType,
 		Data: b,
 	}
 

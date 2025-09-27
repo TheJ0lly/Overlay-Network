@@ -3,12 +3,10 @@ package node
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"log/slog"
 	"net"
 
-	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/networkmessage"
 	"github.com/TheJ0lly/Overlay-Network/internal/queue"
 )
 
@@ -65,13 +63,13 @@ func (currentNode *Node) RunNodeLoop(ctx context.Context) {
 }
 
 // processMessage will take the message envelope and based on the type inside the envelope, it will handle the message accordingly.
-func (currentNode *Node) processMessage(envelope *message.MessageEnvelope) {
+func (currentNode *Node) processMessage(envelope *networkmessage.MessageEnvelope) {
 	log.Printf("processing next message of type: %s", envelope.Type.String())
 	switch envelope.Type {
-	case message.NewNodeJoinType:
+	case networkmessage.NewNodeJoinType:
 		currentNode.processNewNodeJoinMessage(envelope)
 	default:
-		slog.Warn(fmt.Sprintf("unknown message type with value: %d", envelope.Type))
+		log.Printf("unknown message type with value: %d", envelope.Type)
 	}
 }
 
@@ -80,7 +78,7 @@ func (currentNode *Node) processMessage(envelope *message.MessageEnvelope) {
 func addNode(existingNode *Node, newNodeData []byte) {
 	var newNode Node
 	if err := json.Unmarshal(newNodeData, &newNode); err != nil {
-		slog.Warn(fmt.Sprintf("cannot deserialize the content of the new node: %s", err))
+		log.Printf("cannot deserialize the content of the new node: %s", err)
 		return
 	}
 	existingNode.Connections = append(existingNode.Connections, &newNode)
