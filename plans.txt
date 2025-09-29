@@ -1,13 +1,3 @@
-Create the Node structure:
-    S - Maybe an unique ID(hash/uint64/username) to catch IP changes for existing users
-    S - A list of connected nodes
-    S - Maximum number of allowed nodes, so that you cannot surpass the user set limit
-    S - A field with IP
-    S - A bool with alive state
-    U - A queue, with incoming messages, not yet handled
-    U - Node visibility depth number, meaning how many layers of nodes can you see over the primary connections
-    U - Processing Message
-
 For the Node structure:
     - Serialization (JSON, XML, Protobuf(Need to learn how))
     - Connect/Listen methods
@@ -19,17 +9,39 @@ For the Node structure:
 Look into logging capabilities in the STD, or create a small logging utility package
 
 
-For incoming messages, we create a goroutine that takes in as a parameter the current node(or maybe the queue pointer), and it will queue messages.
-In the main loop, the received messages will be handled.
-    - The messages will have different actions types:
-        > Update    - just modify things, and forward to the rest of nodes, apart from the sender node
-        > Query     - look for a resource, IP, username
-
-        > Or maybe we have an interface, Message, and there will be more specific messages types such as:
-
-        > NewNodeJoin
-        > ExistentNodeJoin
-        > UpdateNodeConnectionsStatus
-        > ...
-
 Create some Flow Diagrams so that we know what is happening.
+
+TODO:
+    1. Create all message types
+    2. Complete nodeservice, nodemgmt and ovneto
+    3. Make the connection between all binaries
+    4. NetQueryPublicIp for the nodeservice case where we connect
+    5. Complete NewNodeJoin flow
+
+Message Types:
+    - Network Messages:
+        - NetNewNodeJoin(One-Time) => A message to update the internal state of each node of the network
+        - NetQueryPublicIp(Req/Resp) => A message to ask for the public IP of a node, either in case of a new node joining, or coming back online
+    - System Messages:
+        - SysCreateNewNode(One-Time) => A message to the nodemgmt service to create a new node, but not start it
+        - SysStartNode(One-Time) => A message to the nodemgmt service to start an existing nodeservice
+        - SysStopNode(One-Time) => A message to the nodemgmt service to stop an existing nodeservice
+
+Flows:
+    - NewNodeJoin:
+        1. New node connects to an existing node.
+        2. The existing node will send a message throughout the network notifying other nodes that a new node will join, and they all must perform a RTT test.
+            2a. The existing node will gather all the known and alive nodes IP's and send it to the new node. Also, the existing nodes will be selected IF they have space for a new connection.
+            2b. The new node will take each IP and perform an RTT test. The new node will store the nodes in increasing order of RTT.
+            2c. The new node will select the existing node with the smallest RTT attach to it.
+            2d. The new node will send a request stating the intention of attaching and the existing node will send a response with OK or NOK (for concurrent cases), and its data in JSON format or nil
+                - If the existing node's capacity has been reached before attaching, it will move on to the next node in the list.
+                - If all existing nodes are full and cannot be attached to, it will simply return an error, and stop the execution.
+            2e. The existing node will send a message throughout the network, a message that will update the internal status of the node.
+
+
+Next steps:
+    - If the node is the first in the network: use the -dns flag and -connIp and -connPort to connect to a DNS
+        - In this case, the DNS will be used to get node IP
+    - If the node is not the first: use the flags -connIp and -connPort to connect to another node
+        - In this case, the first node to connect to will send a response that contains this nodes' updated IP

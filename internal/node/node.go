@@ -3,10 +3,12 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
+	"os"
 
-	"github.com/TheJ0lly/Overlay-Network/internal/networkmessage"
+	"github.com/TheJ0lly/Overlay-Network/internal/message"
 	"github.com/TheJ0lly/Overlay-Network/internal/queue"
 )
 
@@ -15,18 +17,20 @@ import (
 // TODO: Maybe in the future we will create another type of node for the PrimaryConnections node,
 // in which we do not have Queue, Depth, and ProcessingMessage
 type Node struct {
-	Username            string              `json:"Username"`
-	Connections         []*Node             `json:"Connections"`
-	ConnectionsCapacity uint16              `json:"ConnectionsCapacity"`
-	IP                  net.IP              `json:"IP"`
-	IsAlive             bool                `json:"IsAlive"`
-	Queue               *queue.MessageQueue `json:"-"`
-	Depth               uint8               `json:"-"`
-	Stop                chan struct{}       `json:"-"`
+	Username            string                                `json:"Username"`
+	Connections         []*Node                               `json:"Connections"`
+	ConnectionsCapacity uint16                                `json:"ConnectionsCapacity"`
+	IP                  net.IP                                `json:"IP"`
+	Port                uint16                                `json:"Port"`
+	IsAlive             bool                                  `json:"IsAlive"`
+	NetworkName         string                                `json:"-"`
+	Queue               *queue.Queue[message.MessageEnvelope] `json:"-"`
+	Depth               uint8                                 `json:"-"`
+	Stop                chan struct{}                         `json:"-"`
 }
 
 // Create creates and returns a Node. In the case where the IP is invalid the function will return nil.
-func Create(username string, ip string, connCap uint16) *Node {
+func Create(username string, ip string, connCap uint16, msgCap uint16) *Node {
 	parsedIp := net.ParseIP(ip)
 	if parsedIp == nil {
 		log.Printf("IP used to create node is invalid: %s", ip)
@@ -38,7 +42,7 @@ func Create(username string, ip string, connCap uint16) *Node {
 		return nil
 	}
 
-	return &Node{Username: username, IP: parsedIp, ConnectionsCapacity: connCap, Queue: queue.Create(connCap)}
+	return &Node{Username: username, IP: parsedIp, ConnectionsCapacity: connCap, Queue: queue.Create[message.MessageEnvelope](msgCap)}
 }
 
 // RunNodeLoop represents the main loop of the current active node. It will handle everything, from incoming/queued messages to state changes.
@@ -63,25 +67,14 @@ func (currentNode *Node) RunNodeLoop(ctx context.Context) {
 }
 
 // processMessage will take the message envelope and based on the type inside the envelope, it will handle the message accordingly.
-func (currentNode *Node) processMessage(envelope *networkmessage.MessageEnvelope) {
+func (currentNode *Node) processMessage(envelope *message.MessageEnvelope) {
 	log.Printf("processing next message of type: %s", envelope.Type.String())
 	switch envelope.Type {
-	case networkmessage.NewNodeJoinType:
+	case message.NetNewNodeJoinType:
 		currentNode.processNewNodeJoinMessage(envelope)
 	default:
 		log.Printf("unknown message type with value: %d", envelope.Type)
 	}
-}
-
-// addNode is an utility function that deserializes the data of a new node and adds it to an existing node.
-// This is merely an state-update function, as the logic of availability will be performed by the node that is performing the addition.
-func addNode(existingNode *Node, newNodeData []byte) {
-	var newNode Node
-	if err := json.Unmarshal(newNodeData, &newNode); err != nil {
-		log.Printf("cannot deserialize the content of the new node: %s", err)
-		return
-	}
-	existingNode.Connections = append(existingNode.Connections, &newNode)
 }
 
 // findNodeInConnectionsByUsername will search through all the nodes reachable from the current node, meaning the primary connections and their respective primary connections.
@@ -96,4 +89,24 @@ func (currentNode *Node) findNodeInConnectionsByUsername(username string) *Node 
 		}
 	}
 	return nil
+}
+
+func MarshalToFile(currentNode *Node) error {
+	b, err := json.Marshal(currentNode)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(fmt.Sprintf("%s_%s", currentNode.Username, currentNode.NetworkName), b, 0666)
+}
+
+func UnmarshalFromFile(file string) (*Node, error) {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	currentNode := &Node{}
+
+	return currentNode, json.Unmarshal(b, &currentNode)
 }

@@ -9,12 +9,14 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/TheJ0lly/Overlay-Network/internal/networkutils"
 	"github.com/spf13/cobra"
 )
 
 var ovnetoPathDir string
 
 func startNodeMgmt(cmd *cobra.Command, args []string) {
+	fmt.Println(networkutils.GetIPFromDNS())
 	nodemgmtInfoFile := fmt.Sprintf("%s/nodemgmt.info", ovnetoPathDir)
 	if _, err := os.Stat(nodemgmtInfoFile); err == nil {
 		fmt.Printf("nodemgmt service already running\n")
@@ -108,7 +110,7 @@ func main() {
 
 	rootCmd := &cobra.Command{Use: "ovneto [start | stop]"}
 	startCmd := &cobra.Command{
-		Use:   "start [port=(default 8080)]",
+		Use:   "start [value to use as port for nodemgmt - default 8080]",
 		Short: "starts the nodemgmt service",
 		Args:  cobra.MaximumNArgs(1),
 		Run:   startNodeMgmt,

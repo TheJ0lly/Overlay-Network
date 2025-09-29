@@ -1,4 +1,4 @@
-package networkmessage
+package message
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestMessageTypeString(t *testing.T) {
-	if NewNodeJoinType.String() != "NewNodeJoin" {
+	if NetNewNodeJoinType.String() != "NewNodeJoin" {
 		t.Fatal("incorrect output")
 	}
 
@@ -17,15 +17,15 @@ func TestMessageTypeString(t *testing.T) {
 }
 
 func TestGetContentMessageWithCorrectContainer(t *testing.T) {
-	nnj := NewNodeJoinMessage{ExistingNodeUsername: "Node1", NodeData: json.RawMessage{'1', '2', '3'}}
+	nnj := NetNewNodeJoinMessage{ExistingNodeUsername: "Node1", NodeData: json.RawMessage{'1', '2', '3'}}
 	nnjB, err := json.Marshal(nnj)
 	if err != nil {
 		t.Fatalf("error while marshaling: %s", err)
 	}
 
-	env := MessageEnvelope{Type: NewNodeJoinType, Data: nnjB}
+	env := MessageEnvelope{Type: NetNewNodeJoinType, Data: nnjB}
 
-	nnj2 := NewNodeJoinMessage{}
+	nnj2 := NetNewNodeJoinMessage{}
 
 	if err = env.GetMessageContent(&nnj2); err != nil {
 		t.Fatalf("error while getting message content: %s", err)
@@ -37,13 +37,13 @@ func TestGetContentMessageWithCorrectContainer(t *testing.T) {
 }
 
 func TestGetContentMessageWithInorrectContainer(t *testing.T) {
-	nnj := NewNodeJoinMessage{ExistingNodeUsername: "Node1", NodeData: json.RawMessage{'1', '2', '3'}}
+	nnj := NetNewNodeJoinMessage{ExistingNodeUsername: "Node1", NodeData: json.RawMessage{'1', '2', '3'}}
 	nnjB, err := json.Marshal(nnj)
 	if err != nil {
 		t.Fatalf("error while marshaling: %s", err)
 	}
 
-	env := MessageEnvelope{Type: NewNodeJoinType, Data: nnjB}
+	env := MessageEnvelope{Type: NetNewNodeJoinType, Data: nnjB}
 	type WrongMessageCont struct {
 		AnInt int `json:"INT"`
 	}
@@ -56,7 +56,7 @@ func TestGetContentMessageWithInorrectContainer(t *testing.T) {
 }
 
 func TestGetContentMessageWithCorrectContainerAndIncorrectEnvelopeType(t *testing.T) {
-	nnj := NewNodeJoinMessage{ExistingNodeUsername: "Node1", NodeData: json.RawMessage{'1', '2', '3'}}
+	nnj := NetNewNodeJoinMessage{ExistingNodeUsername: "Node1", NodeData: json.RawMessage{'1', '2', '3'}}
 	nnjB, err := json.Marshal(nnj)
 	if err != nil {
 		t.Fatalf("error while marshaling: %s", err)
@@ -64,7 +64,7 @@ func TestGetContentMessageWithCorrectContainerAndIncorrectEnvelopeType(t *testin
 
 	env := MessageEnvelope{Type: 255, Data: nnjB}
 
-	nnj2 := NewNodeJoinMessage{}
+	nnj2 := NetNewNodeJoinMessage{}
 
 	if err = env.GetMessageContent(&nnj2); err == nil {
 		t.Fatalf("there should be an error due to incorrect envelope type value")

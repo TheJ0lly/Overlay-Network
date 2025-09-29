@@ -1,4 +1,4 @@
-package networkmessage
+package message
 
 import (
 	"encoding/json"
@@ -8,12 +8,13 @@ import (
 type MessageType uint8
 
 const (
-	NewNodeJoinType MessageType = iota
+	NetNewNodeJoinType MessageType = iota
+	SysCreateNewNodeType
 )
 
 func (mt MessageType) String() string {
 	switch mt {
-	case NewNodeJoinType:
+	case NetNewNodeJoinType:
 		return "NewNodeJoin"
 	default:
 		return "Unknown"
@@ -31,17 +32,12 @@ type MessageEnvelope struct {
 func (me *MessageEnvelope) GetMessageContent(container any) error {
 	// We need to check for pointers in the switch, otherwise it won't work
 	switch t := container.(type) {
-	case *NewNodeJoinMessage:
-		if me.Type != NewNodeJoinType {
+	case *NetNewNodeJoinMessage:
+		if me.Type != NetNewNodeJoinType {
 			return fmt.Errorf("passed container does not match the message type: %s", me.Type.String())
 		}
 	default:
 		return fmt.Errorf("unknown message type - got: %s - expected: %s", t, me.Type.String())
 	}
 	return json.Unmarshal(me.Data, container)
-}
-
-type NewNodeJoinMessage struct {
-	ExistingNodeUsername string          `json:"ExistingNodeUsername"`
-	NodeData             json.RawMessage `json:"NodeData"`
 }

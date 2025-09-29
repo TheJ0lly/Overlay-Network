@@ -7,32 +7,32 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TheJ0lly/Overlay-Network/internal/networkmessage"
+	"github.com/TheJ0lly/Overlay-Network/internal/message"
 )
 
 func TestCreate(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
+	currNode := Create("Node1", "192.1.1.1", 2, 2)
 	if currNode == nil {
 		t.Fatal("node should be created successfully")
 	}
 }
 
 func TestCreateWithInvalidIp(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.256", 2)
+	currNode := Create("Node1", "192.1.1.256", 2, 2)
 	if currNode != nil {
 		t.Fatal("node should not be created")
 	}
 }
 
 func TestCreateWithInvalidConnectionCapacity(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 0)
+	currNode := Create("Node1", "192.1.1.1", 0, 2)
 	if currNode != nil {
 		t.Fatal("node should not be created - connection capacity is 0")
 	}
 }
 
 func TestRunNodeLoopWithContextWithoutCancel_NormalBehavior(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
+	currNode := Create("Node1", "192.1.1.1", 2, 2)
 	if currNode == nil {
 		t.Fatal("node should be created successfully")
 	}
@@ -48,7 +48,7 @@ func TestRunNodeLoopWithContextWithoutCancel_NormalBehavior(t *testing.T) {
 }
 
 func TestRunNodeLoopWithContextWithCancelThenCancelWithError(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
+	currNode := Create("Node1", "192.1.1.1", 2, 2)
 	if currNode == nil {
 		t.Fatal("node should be created successfully")
 	}
@@ -65,18 +65,18 @@ func TestRunNodeLoopWithContextWithCancelThenCancelWithError(t *testing.T) {
 }
 
 func TestProcessMessageWithUnknownMessage(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
+	currNode := Create("Node1", "192.1.1.1", 2, 2)
 	if currNode == nil {
 		t.Fatal("node should be created successfully")
 	}
 
-	mockNode := Create("Node2", "192.168.1.2", 3)
+	mockNode := Create("Node2", "192.168.1.2", 3, 2)
 	b, err := json.Marshal(&mockNode)
 	if err != nil {
 		t.Fatalf("marshaling error for mock node: %s", err)
 	}
 
-	msg := networkmessage.NewNodeJoinMessage{
+	msg := message.NetNewNodeJoinMessage{
 		ExistingNodeUsername: "Node1",
 		NodeData:             b,
 	}
@@ -85,7 +85,7 @@ func TestProcessMessageWithUnknownMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshaling error for message content: %s", err)
 	}
-	env := networkmessage.MessageEnvelope{
+	env := message.MessageEnvelope{
 		Type: 255,
 		Data: b,
 	}
@@ -103,18 +103,18 @@ func TestProcessMessageWithUnknownMessage(t *testing.T) {
 }
 
 func TestProcessMessageWithNewNodeJoinMessage(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
+	currNode := Create("Node1", "192.1.1.1", 2, 2)
 	if currNode == nil {
 		t.Fatal("node should be created successfully")
 	}
 
-	mockNode := Create("Node2", "192.168.1.2", 3)
+	mockNode := Create("Node2", "192.168.1.2", 3, 2)
 	b, err := json.Marshal(&mockNode)
 	if err != nil {
 		t.Fatalf("marshaling error for mock node: %s", err)
 	}
 
-	msg := networkmessage.NewNodeJoinMessage{
+	msg := message.NetNewNodeJoinMessage{
 		ExistingNodeUsername: "Node1",
 		NodeData:             b,
 	}
@@ -123,8 +123,8 @@ func TestProcessMessageWithNewNodeJoinMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshaling error for message content: %s", err)
 	}
-	env := networkmessage.MessageEnvelope{
-		Type: networkmessage.NewNodeJoinType,
+	env := message.MessageEnvelope{
+		Type: message.NetNewNodeJoinType,
 		Data: b,
 	}
 
@@ -141,41 +141,21 @@ func TestProcessMessageWithNewNodeJoinMessage(t *testing.T) {
 }
 
 func TestAddNodeSuccessfully(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
+	currNode := Create("Node1", "192.1.1.1", 2, 2)
 	if currNode == nil {
 		t.Fatal("node should be created successfully")
 	}
 
-	mockNode := Create("Node2", "192.168.1.2", 3)
-	b, err := json.Marshal(&mockNode)
-	if err != nil {
-		t.Fatalf("marshaling error for mock node: %s", err)
-	}
+	mockNode := Create("Node2", "192.168.1.2", 3, 2)
 
-	addNode(currNode, b)
-}
-
-func TestAddNodeWithInvalidJSON(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
-	if currNode == nil {
-		t.Fatal("node should be created successfully")
-	}
-
-	mockNode := Create("Node2", "192.168.1.2", 3)
-	b, err := json.Marshal(&mockNode)
-	if err != nil {
-		t.Fatalf("marshaling error for mock node: %s", err)
-	}
-
-	b = append(b, '0')
-	addNode(currNode, b)
+	currNode.Connections = append(currNode.Connections, mockNode)
 }
 
 func TestFindNodeInConnectionsByUsername(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
-	otherNode := Create("Node3", "192.168.1.3", 4)
+	currNode := Create("Node1", "192.1.1.1", 2, 2)
+	otherNode := Create("Node3", "192.168.1.3", 4, 2)
 	currNode.Connections = append(currNode.Connections, otherNode)
-	mockNode := Create("Node2", "192.168.1.2", 3)
+	mockNode := Create("Node2", "192.168.1.2", 3, 2)
 	otherNode.Connections = append(otherNode.Connections, mockNode)
 
 	if currNode.findNodeInConnectionsByUsername("Node2") == nil {
@@ -184,10 +164,10 @@ func TestFindNodeInConnectionsByUsername(t *testing.T) {
 }
 
 func TestFindNodeInConnectionsByUsernameWithWrongUsername(t *testing.T) {
-	currNode := Create("Node1", "192.1.1.1", 2)
-	otherNode := Create("Node3", "192.168.1.3", 4)
+	currNode := Create("Node1", "192.1.1.1", 2, 2)
+	otherNode := Create("Node3", "192.168.1.3", 4, 2)
 	currNode.Connections = append(currNode.Connections, otherNode)
-	mockNode := Create("Node2", "192.168.1.2", 3)
+	mockNode := Create("Node2", "192.168.1.2", 3, 2)
 	otherNode.Connections = append(otherNode.Connections, mockNode)
 
 	if currNode.findNodeInConnectionsByUsername("Node4") != nil {
