@@ -7,8 +7,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/networkutils"
 	"github.com/TheJ0lly/Overlay-Network/internal/queue"
 )
 
@@ -25,6 +27,7 @@ type Node struct {
 	IsAlive             bool                                  `json:"IsAlive"`
 	NetworkName         string                                `json:"-"`
 	Queue               *queue.Queue[message.MessageEnvelope] `json:"-"`
+	QueueCap            uint16                                `json:"MessageQueueCapacity"`
 	Depth               uint8                                 `json:"-"`
 	Stop                chan struct{}                         `json:"-"`
 }
@@ -43,6 +46,49 @@ func Create(username string, ip string, connCap uint16, msgCap uint16) *Node {
 	}
 
 	return &Node{Username: username, IP: parsedIp, ConnectionsCapacity: connCap, Queue: queue.Create[message.MessageEnvelope](msgCap)}
+}
+
+func (currentNode *Node) RunMessageQueueLoop(ctx context.Context) {
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", currentNode.Port))
+	if err != nil {
+		fmt.Printf("error trying to start message queue loop: %s\n", err)
+		currentNode.Stop <- struct{}{}
+		return
+	}
+
+	fmt.Printf("listening on port: %d - remote: %s\n\n", currentNode.Port, currentNode.IP)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			fmt.Printf("incoming connection refused: %s\n", err)
+			continue
+		}
+
+		go func(conn net.Conn) {
+			envelope, err := networkutils.ReceiveMessage(conn)
+			if err != nil {
+				fmt.Printf("incoming message could not be received: %s\n", err)
+				return
+			}
+
+			// Here we handle the NetQueryPublicIpReq
+			if envelope.Type == message.NetQueryPublicIpReqType {
+				remoteIp := conn.RemoteAddr().String()
+
+				if _, err := networkutils.SendMessage(
+					remoteIp,
+					message.MessageEnvelope{
+						Type: message.NetQueryPublicIpRespType,
+						Data: []byte(remoteIp),
+					}, 10*time.Second); err != nil {
+					fmt.Printf("could not send NetQueryPublicIpResp: %s\n", err)
+				}
+				return
+			}
+			currentNode.Queue.Add(envelope)
+		}(conn)
+	}
 }
 
 // RunNodeLoop represents the main loop of the current active node. It will handle everything, from incoming/queued messages to state changes.
@@ -91,13 +137,17 @@ func (currentNode *Node) findNodeInConnectionsByUsername(username string) *Node 
 	return nil
 }
 
-func MarshalToFile(currentNode *Node) error {
+func (currentNode *Node) GetNodeAddress() string {
+	return net.JoinHostPort(string(currentNode.IP), fmt.Sprintf("%d", currentNode.Port))
+}
+
+func MarshalToFile(currentNode *Node, folder string) error {
 	b, err := json.Marshal(currentNode)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(fmt.Sprintf("%s_%s", currentNode.Username, currentNode.NetworkName), b, 0666)
+	return os.WriteFile(fmt.Sprintf("%s/%s_%s", folder, currentNode.Username, currentNode.NetworkName), b, 0666)
 }
 
 func UnmarshalFromFile(file string) (*Node, error) {

@@ -1,16 +1,64 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
 	"github.com/TheJ0lly/Overlay-Network/internal/networkutils"
 	"github.com/TheJ0lly/Overlay-Network/internal/node"
 	"github.com/TheJ0lly/Overlay-Network/internal/queue"
 )
+
+var nodeServicePathDir string
+
+func SetNewNode(newNode *node.Node) error {
+	if err := node.MarshalToFile(newNode, nodeServicePathDir); err != nil {
+		return fmt.Errorf("error while marshaling new node to file: %s", err)
+	}
+	return nil
+}
+
+func GetExistentNode(username string, network string) (node.Node, error) {
+	files, err := os.ReadDir(".")
+	if err != nil {
+		return node.Node{}, fmt.Errorf("error occurred while reading the directory of the binary: %s", err)
+	}
+
+	foundFile := false
+	userFile := fmt.Sprintf("%s_%s", username, network)
+	for _, f := range files {
+		if f.Name() == userFile {
+			foundFile = true
+			break
+		}
+	}
+
+	if !foundFile {
+		return node.Node{}, fmt.Errorf("found no file with %s", userFile)
+	}
+
+	b, err := os.ReadFile(userFile)
+	if err != nil {
+		return node.Node{}, fmt.Errorf("error while reading node file: %s", err)
+	}
+
+	var existentNode node.Node
+
+	if err := json.Unmarshal(b, &existentNode); err != nil {
+		return node.Node{}, fmt.Errorf("error while unmarshaling node data: %s", err)
+	}
+
+	return existentNode, nil
+}
 
 func main() {
 	username := flag.String("user", "", "The username of the node - unique for each node in each network")
@@ -34,8 +82,23 @@ func main() {
 		return
 	}
 
+	nodeServicePath, err := os.Executable()
+	if err != nil {
+		fmt.Printf("could not get the ovneto absolute path: %s - cannot use any related feature\n", err)
+		return
+	}
+
+	nodeServicePathDir, err = filepath.Abs(nodeServicePath)
+	if err != nil {
+		fmt.Printf("could not get the ovneto absolute path: %s - cannot use any related feature\n", err)
+		return
+	}
+
+	nodeServicePathDir = filepath.Dir(nodeServicePathDir)
+	fmt.Printf("the node service path: %s\n", nodeServicePath)
+
 	// =============== Get public IP ===============
-	var publicIP net.IP
+	var publicIP net.IP = nil
 
 	if *useDns {
 		fmt.Printf("using Domain Name Servers to get public IP\n")
@@ -45,8 +108,34 @@ func main() {
 			IP:   net.ParseIP(*connectionIp),
 			Port: uint16(*connectionPort),
 		}
-		// Need to create another type of NET message that queries for the public IP
-		networkutils.SendMessage(&mockNode, message.MessageEnvelope{})
+
+		conn, err := networkutils.SendMessage(
+			mockNode.GetNodeAddress(),
+			message.MessageEnvelope{
+				Type: message.NetQueryPublicIpReqType,
+				Data: json.RawMessage{},
+			}, 10*time.Second)
+
+		if err != nil {
+			fmt.Printf("could not send NetQueryPublicIpReq message: %s - will stop now\n", err)
+			return
+		}
+
+		// Here we receive a NetQueryPublicResp
+		envelope, err := networkutils.ReceiveMessage(conn)
+		if err != nil {
+			fmt.Printf("could not receive NetQueryPublicIpResp message: %s - will stop now\n", err)
+			return
+		}
+
+		var queryResp message.NetQueryPublicIpResp
+		if err := envelope.GetMessageContent(&queryResp); err != nil {
+			fmt.Printf("cannot get the content of NetQueryPublicIpResp: %s - will stop now\n", err)
+			return
+		}
+
+		publicIP = queryResp.PublicIP
+
 	} else if *ip != "" && *port != 0 {
 		publicIP = net.ParseIP(*ip)
 	} else {
@@ -60,31 +149,10 @@ func main() {
 	}
 
 	// =============== Get/Set node data
-	files, err := os.ReadDir(".")
-	if err != nil {
-		fmt.Printf("error occurred while reading the directory of the binary: %s\n", err)
-		return
-	}
-
-	foundFile := false
-	userFile := fmt.Sprintf("%s_%s", *username, *network)
-	for _, f := range files {
-		if f.Name() == userFile {
-			foundFile = true
-			break
-		}
-	}
 
 	var currentNode node.Node
 
-	if !foundFile {
-		fmt.Printf("found no file with %s\n", userFile)
-		if !*newNode {
-			fmt.Printf("the `new` flag is not used and node file does not exist - will stop now\n")
-			return
-		}
-		fmt.Printf("will create a new node file: %s\n", userFile)
-
+	if *newNode {
 		currentNode = node.Node{
 			Username:            *username,
 			Connections:         make([]*node.Node, 0, *connectionCap),
@@ -94,17 +162,43 @@ func main() {
 			IsAlive:             true,
 			NetworkName:         *network,
 			Queue:               queue.Create[message.MessageEnvelope](uint16(*messageQueueCap)),
+			QueueCap:            uint16(*messageQueueCap),
 			Depth:               uint8(*depthVision),
 			Stop:                make(chan struct{}),
 		}
 
-		if err := node.MarshalToFile(&currentNode); err != nil {
-			fmt.Printf("error while marshaling new node to file: %s\n", err)
+		if err := SetNewNode(&currentNode); err != nil {
+			fmt.Println(err)
 			return
 		}
 	} else {
-		// read the user_network file
+		fmt.Printf("trying to get existent user: %s with network: %s\n", *username, *network)
+		currentNode, err = GetExistentNode(*username, *network)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
 	}
 
-	// Node Loop
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	ctx, cancelFunc := context.WithCancelCause(context.Background())
+
+	// Create the message receiving function with mutex (who gets priority the message receiver or handler routine?)
+	go currentNode.RunMessageQueueLoop(ctx)
+	go currentNode.RunNodeLoop(ctx)
+
+	select {
+	case sig := <-signals:
+		switch sig {
+		case syscall.SIGTERM:
+			cancelFunc(fmt.Errorf("SIGTERM has been sent to this node"))
+		case syscall.SIGINT:
+			cancelFunc(fmt.Errorf("SIGINT has been sent to this node"))
+		}
+	case <-currentNode.Stop:
+		cancelFunc(fmt.Errorf("stop signal has been received"))
+	}
+
+	fmt.Printf("node stopped - reason: %s\n", context.Cause(ctx))
 }

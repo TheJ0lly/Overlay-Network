@@ -12,11 +12,12 @@ Look into logging capabilities in the STD, or create a small logging utility pac
 Create some Flow Diagrams so that we know what is happening.
 
 TODO:
-    1. Create all message types
+    1. Create all message types - DONE
     2. Complete nodeservice, nodemgmt and ovneto
     3. Make the connection between all binaries
-    4. NetQueryPublicIp for the nodeservice case where we connect
-    5. Complete NewNodeJoin flow
+    4. Create a handler for the new messages that just stores the new messages into the queue
+    5. NetQueryPublicIp for the nodeservice case where we connect
+    6. Complete NewNodeJoin flow
 
 Message Types:
     - Network Messages:
