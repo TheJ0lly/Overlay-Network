@@ -1,0 +1,48 @@
+For the Node structure:
+    - Serialization (JSON, XML, Protobuf(Need to learn how))
+    - Connect/Listen methods
+    - User configuration file/CLI flags
+    - Network state serialization(separate file)
+    - Send
+
+
+Look into logging capabilities in the STD, or create a small logging utility package
+
+
+Create some Flow Diagrams so that we know what is happening.
+
+TODO:
+    1. Create all message types - DONE
+    2. Complete nodeservice, nodemgmt and ovneto
+    3. Make the connection between all binaries
+    4. Create a handler for the new messages that just stores the new messages into the queue
+    5. NetQueryPublicIp for the nodeservice case where we connect
+    6. Complete NewNodeJoin flow
+
+Message Types:
+    - Network Messages:
+        - NetNewNodeJoin(One-Time) => A message to update the internal state of each node of the network
+        - NetQueryPublicIp(Req/Resp) => A message to ask for the public IP of a node, either in case of a new node joining, or coming back online
+    - System Messages:
+        - SysCreateNewNode(One-Time) => A message to the nodemgmt service to create a new node, but not start it
+        - SysStartNode(One-Time) => A message to the nodemgmt service to start an existing nodeservice
+        - SysStopNode(One-Time) => A message to the nodemgmt service to stop an existing nodeservice
+
+Flows:
+    - NewNodeJoin:
+        1. New node connects to an existing node.
+        2. The existing node will send a message throughout the network notifying other nodes that a new node will join, and they all must perform a RTT test.
+            2a. The existing node will gather all the known and alive nodes IP's and send it to the new node. Also, the existing nodes will be selected IF they have space for a new connection.
+            2b. The new node will take each IP and perform an RTT test. The new node will store the nodes in increasing order of RTT.
+            2c. The new node will select the existing node with the smallest RTT attach to it.
+            2d. The new node will send a request stating the intention of attaching and the existing node will send a response with OK or NOK (for concurrent cases), and its data in JSON format or nil
+                - If the existing node's capacity has been reached before attaching, it will move on to the next node in the list.
+                - If all existing nodes are full and cannot be attached to, it will simply return an error, and stop the execution.
+            2e. The existing node will send a message throughout the network, a message that will update the internal status of the node.
+
+
+Next steps:
+    - If the node is the first in the network: use the -dns flag and -connIp and -connPort to connect to a DNS
+        - In this case, the DNS will be used to get node IP
+    - If the node is not the first: use the flags -connIp and -connPort to connect to another node
+        - In this case, the first node to connect to will send a response that contains this nodes' updated IP
