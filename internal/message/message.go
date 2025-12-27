@@ -11,10 +11,19 @@ const (
 	NetNewNodeJoin MessageType = iota
 )
 
+func (mt MessageType) String() string {
+	switch mt {
+	case NetNewNodeJoin:
+		return "NetNewNodeJoin"
+	default:
+		return "unknown"
+	}
+}
+
 // MessageEnvelope covers the message such that it will be easier to find out what message type it contains.
 type MessageEnvelope struct {
-	Type MessageType `json:"Type"`
-	Data []byte      `json:"Data"`
+	Type MessageType     `json:"Type"`
+	Data json.RawMessage `json:"Data"`
 }
 
 // SerializeMessageEnvelope takes a message envelope and turns it into a byte slice.
@@ -29,5 +38,7 @@ func DeserializeMessageEnvelope(env *MessageEnvelope, data []byte) error {
 
 // NetNewNodeJoinMessage is the message a node receives when a new node will try to join the network.
 type NetNewNodeJoinMessage struct {
-	NodeIp net.IP `json:"NodeIp"`
+	Ip       net.IP `json:"Ip"`
+	Port     uint16 `json:"Port"`
+	ConnsCap uint16 `json:"ConnsCap"`
 }
