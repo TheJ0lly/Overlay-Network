@@ -55,7 +55,7 @@ func (n *Node) MainLoop() error {
 		return err
 	}
 
-	logging.LogInfo("listening on: %s\n", l.Addr())
+	logging.LogInfo("listening on: %s", l.Addr())
 
 	for {
 		conn, err := l.Accept()
