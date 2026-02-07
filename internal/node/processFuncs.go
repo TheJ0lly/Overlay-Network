@@ -6,9 +6,11 @@ import (
 )
 
 func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage) {
-	newNode, err := Create(msg.Ip.String(), msg.Port, msg.ConnsCap)
+	// Here it is okay to create the node with queue capacity 0, because this is a mock node.
+	// It's queue won't be used. Maybe make another method? TODO
+	newNode, err := Create(msg.Ip.String(), msg.Port, msg.ConnsCap, 0)
 	if err != nil {
-		logging.LogError("failed to create new node object: %s\n", err)
+		logging.LogError("failed to create new node object: %s", err)
 		return
 	}
 
@@ -19,5 +21,5 @@ func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage) 
 		return
 	}
 
-	logging.LogInfo("node connections capacity full - cannot add new node\n")
+	logging.LogInfo("node connections capacity full - cannot add new node")
 }

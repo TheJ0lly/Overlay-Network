@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-var Debug bool = false
+var DebugFlag bool = false
 var defaultTimeFormat string = "02/01/2006 15:04:05"
 
 func LogDebug(format string, args ...any) {
-	if Debug {
+	if DebugFlag {
 		fmt.Printf(fmt.Sprintf("[DBG] [%s] %s\n", time.Now().Format(defaultTimeFormat), format), args...)
 	}
 }
