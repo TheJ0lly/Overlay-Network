@@ -63,6 +63,7 @@ func (n *Node) MainLoop() error {
 			logging.LogError("%s", err)
 			return err
 		}
+		defer conn.Close()
 
 		b, err := io.ReadAll(conn)
 		if err != nil {
