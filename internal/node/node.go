@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/logging"
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
@@ -175,18 +176,10 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 		}
 
 		// Now we look through the list of senders to skip
-		var isSkipSender bool = false
-		for j := range skipSenderList {
-			skipNodeIp := skipSenderList[j].Ip.String()
-			skipNodePort := skipSenderList[j].Port
-			if conn.Ip.String() == skipNodeIp && conn.Port == skipNodePort {
-				logging.LogDebug("jumping over node: %s", conn.GetNodeAddress())
-				isSkipSender = true
-				break
-			}
-		}
-
-		if isSkipSender {
+		if slices.ContainsFunc(skipSenderList, func(sender message.MessageSenderData) bool {
+			return conn.Ip.String() == sender.Ip.String() && conn.Port == sender.Port
+		}) {
+			logging.LogDebug("jumping over node: %s", conn.GetNodeAddress())
 			continue
 		}
 

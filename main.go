@@ -29,6 +29,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	var b []byte
 	var err error
 	var list net.Listener
+	var conn net.Conn
 
 	if env, err = message.CreateMessageEnvelope(
 		message.NetNewNodeJoinQuery,
@@ -74,23 +75,23 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	for running {
 		select {
 		case <-timeoutChan:
-			logging.LogDebug("received timeout - closing join query window")
+			logging.LogInfo("received timeout - closing join query window")
 			running = false
 			continue
 		default:
-			conn, err := list.Accept()
+			conn, err = list.Accept()
 			if err != nil {
 				logging.LogError("error while accepting incoming connections - %s", err)
 				continue
 			}
 
-			b, err := io.ReadAll(conn)
+			b, err = io.ReadAll(conn)
 			if err != nil {
 				logging.LogError("error while reading from the connection - %s", err)
 				continue
 			}
 
-			if err := message.DeserializeMessageEnvelope(&env, b); err != nil {
+			if err = message.DeserializeMessageEnvelope(&env, b); err != nil {
 				logging.LogError("error while deserializing message envelope - %s", err)
 				continue
 			}
