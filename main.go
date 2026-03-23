@@ -161,6 +161,7 @@ func main() {
 	connectionPort := flag.Uint("connport", defaultUninitInt, "the port to connect to when joining a network for the first time")
 	connsCap := flag.Uint("conncap", defaultUninitInt, "the maximum capacity for primary connections")
 	queueCap := flag.Uint("queuecap", defaultUninitInt, "the maximum capacity of the message queue")
+	lifelineTimer := flag.Uint("lifeline", defaultUninitInt, "the duration between lifeline messages")
 	flag.BoolVar(&logging.DebugFlag, "debug", false, "turn on debug logging")
 
 	flag.Parse()
@@ -177,11 +178,16 @@ func main() {
 	if *queueCap == defaultUninitInt {
 		logging.LogErrorWithExit("queue capacity is 0 - must be greater than 0")
 	}
+	if *lifelineTimer == defaultUninitInt {
+		logging.LogErrorWithExit("lifeline duration is 0 - must be greater than 0")
+	}
 
 	currNode, err := node.Create(*ip, uint16(*port), uint16(*connsCap), uint16(*queueCap))
 	if err != nil {
 		logging.LogErrorWithExit("%s", err)
 	}
+	currNode.LifeLineTimer = uint8(*lifelineTimer)
+	logging.LogDebug("setting lifeline duration to: %d", currNode.LifeLineTimer)
 
 	if *newNet {
 		JoinNewNetwork(currNode, connectionIp, connectionPort, port, ip, connsCap)

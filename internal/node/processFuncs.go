@@ -19,7 +19,7 @@ func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 	}
 
 	// We update the node that is being attached to, if we find it in our local view
-	if attachNode := n.FindNodeBasedOnIpAndPort(msg.AttachedIp.String(), msg.AttachedPort); attachNode != nil {
+	if attachNode := n.findNodeBasedOnIpAndPort(msg.AttachedIp.String(), msg.AttachedPort); attachNode != nil {
 		attachNode.Conns = append(attachNode.Conns, newNode)
 		logging.LogDebug("added new node - %s", newNode)
 		logging.LogDebug("attached node state - %s", attachNode)
@@ -123,4 +123,15 @@ func (n *Node) ProcessNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 		logging.LogInfo("error while forwarding message - %s", err)
 		return
 	}
+}
+
+func (n *Node) ProcessNetLifeLineMessage(sender message.MessageSenderData) {
+	if nd := n.findNodeBasedOnIpAndPort(sender.Ip.String(), sender.Port); nd == nil {
+		logging.LogDebug("could not find node: %s:%d", sender.Ip.String(), sender.Port)
+		return
+	} else {
+		nd.Alive = true
+	}
+	logging.LogDebug("received lifeline for node: %s:%d", sender.Ip.String(), sender.Port)
+
 }

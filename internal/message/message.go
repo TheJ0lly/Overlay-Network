@@ -11,6 +11,7 @@ type MessageType uint16
 const (
 	NetNewNodeJoin MessageType = iota
 	NetNewNodeJoinQuery
+	NetLifeLine
 )
 
 func (mt MessageType) String() string {
@@ -19,6 +20,8 @@ func (mt MessageType) String() string {
 		return "NetNewNodeJoin"
 	case NetNewNodeJoinQuery:
 		return "NetNewNodeJoinQuery"
+	case NetLifeLine:
+		return "NetLifeLine"
 	default:
 		return "unknown"
 	}
@@ -92,4 +95,13 @@ type NetNewNodeJoinQueryMessage struct {
 
 func (msg *NetNewNodeJoinQueryMessage) Serialize() ([]byte, error) {
 	return json.Marshal(msg)
+}
+
+type NetLifeLineMessage struct{}
+
+// NetLifeLineMessage is a message that will be sent periodically to let the other nodes that this node is alive.
+// The only data needed, as of now, for this type of message is the message type and the sender, so that we can link with the Death Certificate.
+// We can return (nil, nil) for now as we do not require any data in the actual message.
+func (msg *NetLifeLineMessage) Serialize() ([]byte, error) {
+	return nil, nil
 }

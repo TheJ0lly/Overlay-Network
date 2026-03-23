@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"time"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/logging"
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
@@ -14,10 +15,12 @@ import (
 // The base structure for all nodes in the network.
 // Maybe add an OwnerID (or whatever), to uniquely identify who sent what message
 type Node struct {
-	Ip    net.IP                       `json:"Ip"`
-	Port  uint16                       `json:"Port"`
-	Conns []*Node                      `json:"Conns"`
-	Queue chan message.MessageEnvelope `json:"-"`
+	Ip            net.IP                       `json:"Ip"`
+	Port          uint16                       `json:"Port"`
+	Conns         []*Node                      `json:"Conns"`
+	Queue         chan message.MessageEnvelope `json:"-"`
+	Alive         bool                         `json:"-"`
+	LifeLineTimer uint8                        `json:"-"`
 }
 
 func (n *Node) String() string {
@@ -31,10 +34,12 @@ func Create(ip string, port uint16, connCap uint16, queueCap uint16) (*Node, err
 	}
 
 	return &Node{
-		Ip:    parsedIp,
-		Port:  port,
-		Conns: make([]*Node, 0, connCap),
-		Queue: make(chan message.MessageEnvelope, queueCap),
+		Ip:            parsedIp,
+		Port:          port,
+		Conns:         make([]*Node, 0, connCap),
+		Queue:         make(chan message.MessageEnvelope, queueCap),
+		Alive:         true,
+		LifeLineTimer: 0,
 	}, nil
 }
 
@@ -60,6 +65,9 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		}
 		n.ProcessNetNewNodeQueryMessage(&msg, msgEnv.Sender)
 		return nil
+	case message.NetLifeLine:
+		n.ProcessNetLifeLineMessage(msgEnv.Sender)
+		return nil
 	default:
 		return fmt.Errorf("unknown message type: %d", msgEnv.Type)
 	}
@@ -79,6 +87,43 @@ func (n *Node) processMessageGoroutine() {
 	}
 }
 
+func (n *Node) sendLife() {
+	env, err := message.CreateMessageEnvelope(
+		message.NetLifeLine,
+		&message.NetLifeLineMessage{},
+		message.MessageSenderData{
+			Ip:   n.Ip,
+			Port: n.Port,
+		},
+	)
+
+	if err != nil {
+		logging.LogError("could not serialize lifeline message for periodical update")
+		return
+	}
+
+	// Here there are no nodes we should skip, as this is an initiator message coming from this node.
+	if err = n.ForwardMessage(&env); err != nil {
+		logging.LogDebug("lifeline error: %s", err)
+		return
+	}
+	logging.LogDebug("lifeline sent")
+}
+
+// periodicalMessagesLoop is a method that will run in parallel to the main loop, and it will be used as the main place where messages/protocols are initiated.
+func (n *Node) periodicalMessagesLoop() {
+	lifelineTicker := time.NewTicker(time.Duration(n.LifeLineTimer) * time.Second)
+
+	// This warning has to be ignored for now, because the pattern is correct but currently there's only one timer. Will add more in the future.
+	for {
+		select {
+		case <-lifelineTicker.C:
+			n.sendLife()
+			lifelineTicker.Reset(time.Duration(n.LifeLineTimer) * time.Second)
+		}
+	}
+}
+
 // MainLoop function runs the main loop of the node.
 // For now, you can run the node with this function, or simply look inside it and copy the code and use it. :)
 func (n *Node) MainLoop() error {
@@ -91,6 +136,7 @@ func (n *Node) MainLoop() error {
 	logging.LogInfo("listening on: %s", l.Addr())
 
 	go n.processMessageGoroutine()
+	go n.periodicalMessagesLoop()
 
 	for {
 		conn, err := l.Accept()
@@ -156,14 +202,12 @@ func (n *Node) GetNodeAddress() string {
 
 func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...message.MessageSenderData) error {
 	if len(n.Conns) == 0 {
-		logging.LogInfo("message will not be forwarded")
-		return fmt.Errorf("no other nodes connected to this node")
+		return fmt.Errorf("cannot forward, no other nodes connected to this node")
 	}
 
 	b, err := message.SerializeMessageEnvelope(env)
 	if err != nil {
-		logging.LogInfo("message will not be forwarded")
-		return fmt.Errorf("cannot serialize original envelope")
+		return fmt.Errorf("cannot forward, cannot serialize original envelope")
 	}
 
 	for i := range n.Conns {
@@ -183,15 +227,17 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 			continue
 		}
 
-		logging.LogInfo("forwarded message to node: %s", conn.GetNodeAddress())
 		if err = n.SendMessageToNode(b, conn); err != nil {
 			logging.LogError("could not forward message - %s", err)
+			// Here we should insert the dead hopping mechanism
+			continue
 		}
+		logging.LogInfo("forwarded message to node: %s", conn.GetNodeAddress())
 	}
 	return nil
 }
 
-func (n *Node) FindNodeBasedOnIpAndPort(ip string, port uint16) *Node {
+func (n *Node) findNodeBasedOnIpAndPort(ip string, port uint16) *Node {
 	if n.Ip.String() == ip && n.Port == port {
 		return n
 	}
