@@ -10,17 +10,18 @@ import (
 
 	"github.com/TheJ0lly/Overlay-Network/internal/logging"
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/queue"
 )
 
 // The base structure for all nodes in the network.
 // Maybe add an OwnerID (or whatever), to uniquely identify who sent what message
 type Node struct {
-	Ip            net.IP                       `json:"Ip"`
-	Port          uint16                       `json:"Port"`
-	Conns         []*Node                      `json:"Conns"`
-	Queue         chan message.MessageEnvelope `json:"-"`
-	Alive         bool                         `json:"-"`
-	LifeLineTimer uint8                        `json:"-"`
+	Ip            net.IP                                      `json:"Ip"`
+	Port          uint16                                      `json:"Port"`
+	Conns         []*Node                                     `json:"Conns"`
+	Queue         queue.MessageQueue[message.MessageEnvelope] `json:"-"`
+	Alive         bool                                        `json:"-"`
+	LifeLineTimer uint8                                       `json:"-"`
 }
 
 func (n *Node) String() string {
@@ -37,7 +38,7 @@ func Create(ip string, port uint16, connCap uint16, queueCap uint16) (*Node, err
 		Ip:            parsedIp,
 		Port:          port,
 		Conns:         make([]*Node, 0, connCap),
-		Queue:         make(chan message.MessageEnvelope, queueCap),
+		Queue:         queue.Create[message.MessageEnvelope](queueCap),
 		Alive:         true,
 		LifeLineTimer: 0,
 	}, nil
@@ -76,14 +77,14 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 // processMessageGoroutine handles the queue of messages and processes them.
 func (n *Node) processMessageGoroutine() {
 	for {
-		msg := <-n.Queue
+		msg := n.Queue.PopFront()
 
 		logging.LogInfo("started processing new message: type=%s data=%s sender=%v", msg.Type, msg.Data, msg.Sender)
 
 		if err := n.handleMessage(&msg); err != nil {
 			logging.LogError("%s", err)
 		}
-		logging.LogDebug("messages left in queue: %d", len(n.Queue))
+		logging.LogDebug("messages left in queue: %d", n.Queue.Length())
 	}
 }
 
@@ -161,13 +162,11 @@ func (n *Node) MainLoop() error {
 		}
 
 		// Don't know if channels can truly get past their limit, might as well use "==", TODO
-		if c := cap(n.Queue); len(n.Queue) == c {
-			logging.LogInfo("queue is full (%d)! new message will be discarded", c)
+		if err = n.Queue.Append(env); err != nil {
+			logging.LogInfo("message queue error: %s", err)
 			continue
 		}
 
-		// We push the Message Envelope in the channel for processing
-		n.Queue <- env
 	}
 }
 
