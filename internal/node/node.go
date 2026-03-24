@@ -16,12 +16,15 @@ import (
 // The base structure for all nodes in the network.
 // Maybe add an OwnerID (or whatever), to uniquely identify who sent what message
 type Node struct {
-	Ip            net.IP                                      `json:"Ip"`
-	Port          uint16                                      `json:"Port"`
-	Conns         []*Node                                     `json:"Conns"`
-	Queue         queue.MessageQueue[message.MessageEnvelope] `json:"-"`
-	Alive         bool                                        `json:"-"`
-	LifeLineTimer uint8                                       `json:"-"`
+	Ip             net.IP                                      `json:"Ip"`
+	Port           uint16                                      `json:"Port"`
+	Conns          []*Node                                     `json:"Conns"`
+	Queue          queue.MessageQueue[message.MessageEnvelope] `json:"-"`
+	Alive          bool                                        `json:"-"`
+	LifeLineTimer  uint8                                       `json:"-"`
+	LifeLineTicker *time.Ticker                                `json:"-"`
+	DeathTimer     uint8                                       `json:"-"`
+	LastTimeAlive  int64                                       `json:"-"`
 }
 
 func (n *Node) String() string {
@@ -49,6 +52,19 @@ func (n *Node) listen() (net.Listener, error) {
 	return net.Listen("tcp", fmt.Sprintf("%s:%d", n.Ip, n.Port))
 }
 
+func (n *Node) setLastAliveTimeForNode(pair message.IpPortPair, t int64) {
+	for i := range n.Conns {
+		connPair := message.IpPortPair{
+			Ip:   n.Conns[i].Ip,
+			Port: n.Conns[i].Port,
+		}
+		if message.CompareIpPortPair(connPair, pair) {
+			n.Conns[i].LastTimeAlive = t
+			logging.LogDebug("setting last time for node: %v - %v", pair, t)
+		}
+	}
+}
+
 // handleMessage function acts as a dispatcher of the message to its correct handler.
 func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 	switch msgEnv.Type {
@@ -58,6 +74,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
 		n.ProcessNetNewNodeJoinMessage(&msg, msgEnv.Sender)
+		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetNewNodeJoinQuery:
 		msg := message.NetNewNodeJoinQueryMessage{}
@@ -65,9 +82,11 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
 		n.ProcessNetNewNodeQueryMessage(&msg, msgEnv.Sender)
+		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetLifeLine:
 		n.ProcessNetLifeLineMessage(msgEnv.Sender)
+		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	default:
 		return fmt.Errorf("unknown message type: %d", msgEnv.Type)
@@ -77,6 +96,9 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 // processMessageGoroutine handles the queue of messages and processes them.
 func (n *Node) processMessageGoroutine() {
 	for {
+		if n.Queue.Length() == 0 {
+			continue
+		}
 		msg := n.Queue.PopFront()
 
 		logging.LogInfo("started processing new message: type=%s data=%s sender=%v", msg.Type, msg.Data, msg.Sender)
@@ -84,15 +106,23 @@ func (n *Node) processMessageGoroutine() {
 		if err := n.handleMessage(&msg); err != nil {
 			logging.LogError("%s", err)
 		}
+
+		logging.LogInfo("finished processing message: type=%s data=%s sender=%v", msg.Type, msg.Data, msg.Sender)
 		logging.LogDebug("messages left in queue: %d", n.Queue.Length())
 	}
 }
 
+func (n *Node) resetLifelineTimer() {
+	n.LifeLineTicker.Reset(time.Duration(n.LifeLineTimer) * time.Second)
+}
+
 func (n *Node) sendLife() {
+	logging.LogDebug("starting lifeline announcement")
+
 	env, err := message.CreateMessageEnvelope(
 		message.NetLifeLine,
 		&message.NetLifeLineMessage{},
-		message.MessageSenderData{
+		message.IpPortPair{
 			Ip:   n.Ip,
 			Port: n.Port,
 		},
@@ -111,16 +141,96 @@ func (n *Node) sendLife() {
 	logging.LogDebug("lifeline sent")
 }
 
+// checkQueueForLifelinesForDeadNodes will get the nodes marked as dead, and check if there are lifelines in the queue.
+// This mechanism is for reducing the network congestion due to state changes that are yet to be processed.
+// Meaning that when we mark a node as dead, we might have a message coming from that node in queue, thus we can remove the death announcement.
+func (n *Node) checkQueueForLifelinesForDeadNodes(deadNodes []message.IpPortPair) []message.IpPortPair {
+	return slices.DeleteFunc(deadNodes, func(pair message.IpPortPair) bool {
+		return n.Queue.ContainsFunc(func(me message.MessageEnvelope) bool {
+			val := message.CompareIpPortPair(me.Sender, pair)
+			logging.LogDebug("found message in queue for node %v? - %v", pair, val)
+			return val
+		})
+	})
+}
+
+// findDeadNodes will get the IpPortPair of each node that has (time.Now - LastTimeAlive) > DeathTimer.
+func (n *Node) findDeadNodes() []message.IpPortPair {
+	d := time.Second * time.Duration(n.DeathTimer)
+	now := time.Now().UnixMilli()
+
+	var deadNodes []message.IpPortPair = nil
+	for i := range n.Conns {
+		pConn := n.Conns[i]
+		if pConn.Alive == false {
+			logging.LogDebug("jumping over dead node: %v - %v", pConn.Ip, pConn.Port)
+			continue
+		}
+
+		if (now - pConn.LastTimeAlive) > d.Milliseconds() {
+			deadNodes = append(deadNodes, message.IpPortPair{
+				Ip:   pConn.Ip,
+				Port: pConn.Port,
+			})
+		}
+	}
+	return n.checkQueueForLifelinesForDeadNodes(deadNodes)
+}
+
+func (n *Node) setNodesDead(deadNodes []message.IpPortPair) {
+	for i := range n.Conns {
+		connPair := message.IpPortPair{
+			Ip:   n.Conns[i].Ip,
+			Port: n.Conns[i].Port,
+		}
+
+		if slices.ContainsFunc(deadNodes, func(deadNode message.IpPortPair) bool {
+			return message.CompareIpPortPair(deadNode, connPair)
+		}) {
+			logging.LogDebug("node has been marked as dead: %v - %v", n.Conns[i].Ip, n.Conns[i].Port)
+			n.Conns[i].Alive = false
+		}
+	}
+}
+
+func (n *Node) sendDeathAnnouncement(deadNodes []message.IpPortPair) {
+	logging.LogDebug("starting death annoucement")
+
+	env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, &message.NetDeathAnnouncementMessage{
+		DeadNodes: deadNodes,
+	}, message.IpPortPair{
+		Ip:   n.Ip,
+		Port: n.Port,
+	})
+
+	if err != nil {
+		logging.LogError("could not create envelope for death announcement: %s", err)
+		return
+	}
+
+	if err = n.ForwardMessage(&env, deadNodes...); err != nil {
+		logging.LogError("could not forward death annoucement: %s", err)
+		return
+	}
+	logging.LogInfo("death announcement sent for: %v", deadNodes)
+}
+
 // periodicalMessagesLoop is a method that will run in parallel to the main loop, and it will be used as the main place where messages/protocols are initiated.
 func (n *Node) periodicalMessagesLoop() {
-	lifelineTicker := time.NewTicker(time.Duration(n.LifeLineTimer) * time.Second)
+	n.LifeLineTicker = time.NewTicker(time.Duration(n.LifeLineTimer) * time.Second)
+	deathTicker := time.NewTicker(time.Duration(n.DeathTimer) * time.Second)
 
-	// This warning has to be ignored for now, because the pattern is correct but currently there's only one timer. Will add more in the future.
 	for {
 		select {
-		case <-lifelineTicker.C:
+		case <-n.LifeLineTicker.C:
 			n.sendLife()
-			lifelineTicker.Reset(time.Duration(n.LifeLineTimer) * time.Second)
+			n.resetLifelineTimer()
+		case <-deathTicker.C:
+			if deadNodes := n.findDeadNodes(); deadNodes != nil {
+				n.setNodesDead(deadNodes)
+				n.sendDeathAnnouncement(deadNodes)
+			}
+			deathTicker.Reset(time.Duration(n.DeathTimer) * time.Second)
 		}
 	}
 }
@@ -161,12 +271,10 @@ func (n *Node) MainLoop() error {
 			logging.LogError("%s", err)
 		}
 
-		// Don't know if channels can truly get past their limit, might as well use "==", TODO
 		if err = n.Queue.Append(env); err != nil {
 			logging.LogInfo("message queue error: %s", err)
 			continue
 		}
-
 	}
 }
 
@@ -199,7 +307,7 @@ func (n *Node) GetNodeAddress() string {
 	return net.JoinHostPort(n.Ip.String(), fmt.Sprintf("%d", n.Port))
 }
 
-func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...message.MessageSenderData) error {
+func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...message.IpPortPair) error {
 	if len(n.Conns) == 0 {
 		return fmt.Errorf("cannot forward, no other nodes connected to this node")
 	}
@@ -213,13 +321,14 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 		conn := n.Conns[i]
 
 		// If the sender of the envelope is within our known connections, we skip sending it to him.
-		if conn.Ip.String() == env.Sender.Ip.String() && conn.Port == env.Sender.Port {
+		if (conn.Ip.String() == env.Sender.Ip.String() && conn.Port == env.Sender.Port) ||
+			conn.Alive == false {
 			logging.LogDebug("jumping over node: %s", conn.GetNodeAddress())
 			continue
 		}
 
 		// Now we look through the list of senders to skip
-		if slices.ContainsFunc(skipSenderList, func(sender message.MessageSenderData) bool {
+		if slices.ContainsFunc(skipSenderList, func(sender message.IpPortPair) bool {
 			return conn.Ip.String() == sender.Ip.String() && conn.Port == sender.Port
 		}) {
 			logging.LogDebug("jumping over node: %s", conn.GetNodeAddress())
@@ -231,8 +340,11 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 			// Here we should insert the dead hopping mechanism
 			continue
 		}
-		logging.LogInfo("forwarded message to node: %s", conn.GetNodeAddress())
+		logging.LogDebug("forwarded message to node: %s", conn.GetNodeAddress())
 	}
+	// Maybe in the future we will add some control variable so as to not do this all the time.
+	// n.resetLifelineTimer()
+	// logging.LogDebug("lifeline timer has been reset due to sending of message")
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"slices"
 )
 
 type MessageType uint16
@@ -12,6 +13,7 @@ const (
 	NetNewNodeJoin MessageType = iota
 	NetNewNodeJoinQuery
 	NetLifeLine
+	NetDeathAnnouncement
 )
 
 func (mt MessageType) String() string {
@@ -22,22 +24,28 @@ func (mt MessageType) String() string {
 		return "NetNewNodeJoinQuery"
 	case NetLifeLine:
 		return "NetLifeLine"
+	case NetDeathAnnouncement:
+		return "NetDeathAnnouncement"
 	default:
 		return "unknown"
 	}
 }
 
-// MessageSenderData represents a pair of an IP and Port signaling who sent the message.
-type MessageSenderData struct {
+// IpPortPair represents a pair of an IP and Port signaling who sent the message.
+type IpPortPair struct {
 	Ip   net.IP `json:"Ip"`
 	Port uint16 `json:"Port"`
 }
 
+func CompareIpPortPair(p1, p2 IpPortPair) bool {
+	return slices.Compare(p1.Ip, p2.Ip) == 0 && p1.Port == p2.Port
+}
+
 // MessageEnvelope covers the message such that it will be easier to find out what message type it contains.
 type MessageEnvelope struct {
-	Type   MessageType       `json:"Type"`
-	Data   json.RawMessage   `json:"Data"`
-	Sender MessageSenderData `json:"Sender"`
+	Type   MessageType     `json:"Type"`
+	Data   json.RawMessage `json:"Data"`
+	Sender IpPortPair      `json:"Sender"`
 }
 
 // SerializeMessageEnvelope takes a message envelope and turns it into a byte slice.
@@ -54,31 +62,22 @@ type SerializableMessage interface {
 	Serialize() ([]byte, error)
 }
 
-func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, s MessageSenderData) (MessageEnvelope, error) {
+func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender IpPortPair) (MessageEnvelope, error) {
 	if b, err := msg.Serialize(); err != nil {
 		return MessageEnvelope{}, fmt.Errorf("failed to marshal message - %s", err)
 	} else {
 		return MessageEnvelope{
 			Type:   mt,
 			Data:   b,
-			Sender: s,
+			Sender: sender,
 		}, nil
 	}
 }
 
 // NetNewNodeJoinMessage is the message a node receives when a new node has queried and find a place to attach.
 type NetNewNodeJoinMessage struct {
-	// The IP of the new node that is joining
-	JoinedIp net.IP `json:"Ip"`
-
-	// The IP of the node that we attach to
-	AttachedIp net.IP `json:"AttachedIp"`
-
-	// The port of the node that we attach to
-	AttachedPort uint16 `json:"AttachedPort"`
-
-	// The port of the new node that is joining
-	JoinedPort uint16 `json:"Port"`
+	JoinedNode   IpPortPair `json:"JoinedNode"`
+	AttachedNode IpPortPair `json:"AttachedNode"`
 }
 
 func (msg *NetNewNodeJoinMessage) Serialize() ([]byte, error) {
@@ -88,9 +87,8 @@ func (msg *NetNewNodeJoinMessage) Serialize() ([]byte, error) {
 // NetNewNodeJoinQueryMessage is the message a node sends when joining a network for the FIRST TIME ever. It will also be used for RTT.
 // The fields represent the data of the sending node, since this message is used as a request and a response.
 type NetNewNodeJoinQueryMessage struct {
-	Ip        net.IP `json:"Ip"`
-	Port      uint16 `json:"Port"`
-	Timestamp int64  `json:"Timestamp"`
+	NewNode   IpPortPair `json:"NewNode"`
+	Timestamp int64      `json:"Timestamp"`
 }
 
 func (msg *NetNewNodeJoinQueryMessage) Serialize() ([]byte, error) {
@@ -104,4 +102,12 @@ type NetLifeLineMessage struct{}
 // We can return (nil, nil) for now as we do not require any data in the actual message.
 func (msg *NetLifeLineMessage) Serialize() ([]byte, error) {
 	return nil, nil
+}
+
+type NetDeathAnnouncementMessage struct {
+	DeadNodes []IpPortPair `json:"DeadNodes"`
+}
+
+func (msg *NetDeathAnnouncementMessage) Serialize() ([]byte, error) {
+	return json.Marshal(msg)
 }

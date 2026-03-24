@@ -3,6 +3,8 @@ package queue
 import (
 	"fmt"
 	"slices"
+
+	"github.com/TheJ0lly/Overlay-Network/internal/logging"
 )
 
 type MessageQueue[T any] struct {
@@ -10,6 +12,7 @@ type MessageQueue[T any] struct {
 }
 
 func Create[T any](cap uint16) MessageQueue[T] {
+	logging.LogDebug("creating queue with capacity: %d", cap)
 	return MessageQueue[T]{
 		q: make([]T, 0, cap),
 	}
@@ -17,7 +20,7 @@ func Create[T any](cap uint16) MessageQueue[T] {
 
 func (mq *MessageQueue[T]) PopFront() T {
 	toret := mq.q[0]
-	mq.q = mq.q[1:]
+	mq.q = slices.Delete(mq.q, 0, 1)
 	return toret
 }
 
@@ -33,6 +36,23 @@ func (mq *MessageQueue[T]) Append(item T) error {
 
 	mq.q = append(mq.q, item)
 	return nil
+}
+
+// FindAllByFunc returns a slice of copies of the objects inside the actual queue. The `find` function condition must return `true` for the item to be found.
+func (mq *MessageQueue[T]) FindAllByFunc(find func(T) bool) []T {
+	var sToRet []T
+
+	for i := range mq.q {
+		if find(mq.q[i]) {
+			sToRet = append(sToRet, mq.q[i])
+		}
+	}
+
+	return sToRet
+}
+
+func (mq *MessageQueue[T]) ContainsFunc(contains func(T) bool) bool {
+	return slices.ContainsFunc(mq.q, contains)
 }
 
 func (mq *MessageQueue[T]) RemoveByFunc(del func(T) bool) {

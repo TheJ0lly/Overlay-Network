@@ -34,11 +34,13 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	if env, err = message.CreateMessageEnvelope(
 		message.NetNewNodeJoinQuery,
 		&message.NetNewNodeJoinQueryMessage{
-			Ip:        currNode.Ip,
-			Port:      currNode.Port,
+			NewNode: message.IpPortPair{
+				Ip:   currNode.Ip,
+				Port: currNode.Port,
+			},
 			Timestamp: initialTimestamp,
 		},
-		message.MessageSenderData{
+		message.IpPortPair{
 			Ip:   currNode.Ip,
 			Port: currNode.Port,
 		},
@@ -103,8 +105,8 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			}
 
 			if newTime := msg.Timestamp - initialTimestamp; newTime < bestTime {
-				bestIp = net.ParseIP(msg.Ip.String())
-				bestPort = msg.Port
+				bestIp = net.ParseIP(msg.NewNode.Ip.String())
+				bestPort = msg.NewNode.Port
 				bestTime = newTime
 				logging.LogDebug("found better node to attach to - ip: %s - port: %d", bestIp, bestPort)
 			}
@@ -119,12 +121,16 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	if env, err = message.CreateMessageEnvelope(
 		message.NetNewNodeJoin,
 		&message.NetNewNodeJoinMessage{
-			AttachedIp:   net.ParseIP(bestIp.String()),
-			AttachedPort: bestPort,
-			JoinedIp:     net.ParseIP(*ip),
-			JoinedPort:   uint16(*port),
+			AttachedNode: message.IpPortPair{
+				Ip:   net.ParseIP(bestIp.String()),
+				Port: bestPort,
+			},
+			JoinedNode: message.IpPortPair{
+				Ip:   net.ParseIP(*ip),
+				Port: uint16(*port),
+			},
 		},
-		message.MessageSenderData{
+		message.IpPortPair{
 			Ip:   currNode.Ip,
 			Port: currNode.Port,
 		},
@@ -161,7 +167,8 @@ func main() {
 	connectionPort := flag.Uint("connport", defaultUninitInt, "the port to connect to when joining a network for the first time")
 	connsCap := flag.Uint("conncap", defaultUninitInt, "the maximum capacity for primary connections")
 	queueCap := flag.Uint("queuecap", defaultUninitInt, "the maximum capacity of the message queue")
-	lifelineTimer := flag.Uint("lifeline", defaultUninitInt, "the duration between lifeline messages")
+	lifelineTimer := flag.Uint("lifeline", defaultUninitInt, "the duration in seconds between lifeline messages")
+	deathannounceTimer := flag.Uint("death", defaultUninitInt, "the duration in seconds between last lifeline message until we announce its death")
 	flag.BoolVar(&logging.DebugFlag, "debug", false, "turn on debug logging")
 
 	flag.Parse()
@@ -181,13 +188,19 @@ func main() {
 	if *lifelineTimer == defaultUninitInt {
 		logging.LogErrorWithExit("lifeline duration is 0 - must be greater than 0")
 	}
+	if *deathannounceTimer == defaultUninitInt {
+		logging.LogErrorWithExit("death duration is 0 - must be greater than 0")
+	}
 
 	currNode, err := node.Create(*ip, uint16(*port), uint16(*connsCap), uint16(*queueCap))
 	if err != nil {
 		logging.LogErrorWithExit("%s", err)
 	}
 	currNode.LifeLineTimer = uint8(*lifelineTimer)
-	logging.LogDebug("setting lifeline duration to: %d", currNode.LifeLineTimer)
+	logging.LogDebug("setting lifeline timer duration to: %d", currNode.LifeLineTimer)
+
+	currNode.DeathTimer = uint8(*deathannounceTimer)
+	logging.LogDebug("setting death timer duration to: %d", currNode.DeathTimer)
 
 	if *newNet {
 		JoinNewNetwork(currNode, connectionIp, connectionPort, port, ip, connsCap)

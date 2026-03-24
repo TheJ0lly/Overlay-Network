@@ -9,17 +9,17 @@ import (
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
 )
 
-func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender message.MessageSenderData) {
+func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender message.IpPortPair) {
 	// Here it is okay to create the node with queue and conn capacity 0, because this is a mock node.
 	// It's queue won't be used. Maybe make another method? TODO
-	newNode, err := Create(msg.JoinedIp.String(), msg.JoinedPort, 0, 0)
+	newNode, err := Create(msg.JoinedNode.Ip.String(), msg.JoinedNode.Port, 0, 0)
 	if err != nil {
 		logging.LogError("failed to create new node object: %s", err)
 		return
 	}
 
 	// We update the node that is being attached to, if we find it in our local view
-	if attachNode := n.findNodeBasedOnIpAndPort(msg.AttachedIp.String(), msg.AttachedPort); attachNode != nil {
+	if attachNode := n.findNodeBasedOnIpAndPort(msg.AttachedNode.Ip.String(), msg.AttachedNode.Port); attachNode != nil {
 		attachNode.Conns = append(attachNode.Conns, newNode)
 		logging.LogDebug("added new node - %s", newNode)
 		logging.LogDebug("attached node state - %s", attachNode)
@@ -28,7 +28,7 @@ func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 	env, err := message.CreateMessageEnvelope(
 		message.NetNewNodeJoin,
 		msg,
-		message.MessageSenderData{
+		message.IpPortPair{
 			Ip:   n.Ip,
 			Port: n.Port,
 		},
@@ -42,7 +42,7 @@ func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 	var skipNodePort uint16 = 0
 	// It means we are the node that is being attached to, we need to skip the sender node
 	// As they append us themselves.
-	if msg.AttachedIp.String() == n.Ip.String() && msg.AttachedPort == n.Port {
+	if msg.AttachedNode.Ip.String() == n.Ip.String() && msg.AttachedNode.Port == n.Port {
 		skipNodeIp = newNode.Ip.String()
 		skipNodePort = newNode.Port
 		logging.LogDebug("we are the node that is being attached to")
@@ -50,18 +50,18 @@ func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 
 	if err = n.ForwardMessage(
 		&env,
-		message.MessageSenderData{
+		message.IpPortPair{
 			Ip:   net.ParseIP(skipNodeIp),
 			Port: skipNodePort,
 		},
 		sender,
 	); err != nil {
-		logging.LogInfo("error while forwarding message - %s", err)
+		logging.LogInfo("%s", err)
 		return
 	}
 }
 
-func (n *Node) ProcessNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender message.MessageSenderData) {
+func (n *Node) ProcessNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender message.IpPortPair) {
 	var env message.MessageEnvelope
 	var b []byte
 	var err error
@@ -70,11 +70,13 @@ func (n *Node) ProcessNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 	if env, err = message.CreateMessageEnvelope(
 		message.NetNewNodeJoinQuery,
 		&message.NetNewNodeJoinQueryMessage{
-			Ip:        n.Ip,
-			Port:      n.Port,
+			NewNode: message.IpPortPair{
+				Ip:   n.Ip,
+				Port: n.Port,
+			},
 			Timestamp: time.Now().UnixMilli(),
 		},
-		message.MessageSenderData{
+		message.IpPortPair{
 			Ip:   n.Ip,
 			Port: n.Port,
 		},
@@ -89,7 +91,7 @@ func (n *Node) ProcessNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 	}
 
 	if cap(n.Conns) > len(n.Conns) {
-		if err = n.SendMessageToIp(b, msg.Ip, msg.Port); err != nil {
+		if err = n.SendMessageToIp(b, msg.NewNode.Ip, msg.NewNode.Port); err != nil {
 			logging.LogError("could not send join query response - %s", err)
 			return
 		}
@@ -109,28 +111,29 @@ func (n *Node) ProcessNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 		&message.MessageEnvelope{
 			Type: message.NetNewNodeJoinQuery,
 			Data: b,
-			Sender: message.MessageSenderData{
+			Sender: message.IpPortPair{
 				Ip:   n.Ip,
 				Port: n.Port,
 			},
 		},
-		message.MessageSenderData{
-			Ip:   msg.Ip,
-			Port: msg.Port,
+		message.IpPortPair{
+			Ip:   msg.NewNode.Ip,
+			Port: msg.NewNode.Port,
 		},
 		sender,
 	); err != nil {
-		logging.LogInfo("error while forwarding message - %s", err)
+		logging.LogInfo("%s", err)
 		return
 	}
 }
 
-func (n *Node) ProcessNetLifeLineMessage(sender message.MessageSenderData) {
+func (n *Node) ProcessNetLifeLineMessage(sender message.IpPortPair) {
 	if nd := n.findNodeBasedOnIpAndPort(sender.Ip.String(), sender.Port); nd == nil {
 		logging.LogDebug("could not find node: %s:%d", sender.Ip.String(), sender.Port)
 		return
 	} else {
 		nd.Alive = true
+		nd.LastTimeAlive = time.Now().UnixMilli()
 	}
 	logging.LogDebug("received lifeline for node: %s:%d", sender.Ip.String(), sender.Port)
 
