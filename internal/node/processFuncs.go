@@ -13,7 +13,7 @@ import (
 func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender message.IpPortPair) {
 	// Here it is okay to create the node with queue and conn capacity 0, because this is a mock node.
 	// It's queue won't be used. Maybe make another method? TODO
-	newNode, err := Create(msg.JoinedNode.Ip.String(), msg.JoinedNode.Port, 0, 0)
+	newNode, err := Create(msg.JoiningNode.Ip.String(), msg.JoiningNode.Port, 0, 0)
 	if err != nil {
 		logging.LogError("failed to create new node object: %s", err)
 		return
@@ -95,27 +95,8 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 		return
 	}
 
-	isCurrentNodeCandidate := false
-
-	if cap(n.Conns) > len(n.Conns) {
-		if len(n.Stat.JoinQueriesOngoing) < cap(n.Conns)-len(n.Conns) {
-			isCurrentNodeCandidate = true
-		} else {
-			// possibly to be changed in the future.
-			// we can send some type of new message that signals to the joining node that resembles this flow:
-			// "OK, I have ongoing join queries, that if successful will fill my primary connections, try again in a few moments to see if I will have some space left"
-			logging.LogInfo("current node has as many ongoing join queries as maximum allowed - will not participate as a possible candidate")
-		}
-	} else {
-		logging.LogInfo("current node has reached its maximum primary connection capacity - will not participate as a possible candidate")
-	}
-
-	if isCurrentNodeCandidate {
-		if err = n.SendMessageToIp(b, msg.NewNode.Ip, msg.NewNode.Port); err != nil {
-			logging.LogError("could not send join query response - %s", err)
-		} else {
-			n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, msg.NewNode)
-		}
+	if err = n.SendMessageToIp(b, msg.NewNode.Ip, msg.NewNode.Port); err != nil {
+		logging.LogError("could not send join query response - %s", err)
 	}
 
 	// The forwarding begins
@@ -181,5 +162,76 @@ func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncement
 				logging.LogError("death announcement: %s", err)
 			}
 		}
+	}
+}
+
+func (n *Node) processNetNewNodeJoinConfirmMessage(msg *message.NetNewNodeJoinConfirmMessage, sender message.IpPortPair) {
+
+	notSuitableEnv, err := message.CreateMessageEnvelope(
+		message.NetNewNodeJoinConfirm,
+		&message.NetNewNodeJoinConfirmMessage{
+			IsSuitable: false,
+		},
+		message.IpPortPair{
+			Ip:   n.Ip,
+			Port: n.Port,
+		},
+	)
+	if err != nil {
+		logging.LogError("could not create join confirm envelope: %s", err)
+		return
+	}
+
+	isSuitableEnv, err := message.CreateMessageEnvelope(
+		message.NetNewNodeJoinConfirm,
+		&message.NetNewNodeJoinConfirmMessage{
+			IsSuitable: true,
+		},
+		message.IpPortPair{
+			Ip:   n.Ip,
+			Port: n.Port,
+		},
+	)
+	if err != nil {
+		logging.LogError("could not create join confirm envelope: %s", err)
+		return
+	}
+
+	notSuitableBytes, err := message.SerializeMessageEnvelope(&notSuitableEnv)
+	if err != nil {
+		logging.LogError("could not serialize join confirm envelope: %s", err)
+		return
+	}
+
+	suitableBytes, err := message.SerializeMessageEnvelope(&isSuitableEnv)
+	if err != nil {
+		logging.LogError("could not serialize join confirm envelope: %s", err)
+		return
+	}
+
+	// Here I sense a bug, due to the fact that if a node indeed finishes the joing process before this, they should be a part of the new join query, but that adds a lot of concurrency problems.
+	// Will think about it.
+	if cap(n.Conns) > len(n.Conns) && len(n.Stat.JoinQueriesOngoing) != 0 && len(n.Stat.JoinQueriesOngoing)+len(n.Conns) >= cap(n.Conns) {
+		logging.LogError("current node has the maximum allowed number of ongoing join queries - will not participate as a candidate")
+		goto notSuitable
+	}
+
+	if cap(n.Conns) == len(n.Conns) {
+		logging.LogDebug("capacity of primary connections is full! checking for dead nodes")
+		if len(n.findDeadNodes()) == 0 {
+			logging.LogDebug("there is no dead node to replace")
+			goto notSuitable
+		}
+	}
+
+	if err = n.SendMessageToIp(suitableBytes, sender.Ip, sender.Port); err != nil {
+		logging.LogError("could not send confirm message: %s", err)
+	}
+	n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, sender)
+	return
+
+notSuitable:
+	if err = n.SendMessageToIp(notSuitableBytes, sender.Ip, sender.Port); err != nil {
+		logging.LogError("could not send confirm message: %s", err)
 	}
 }

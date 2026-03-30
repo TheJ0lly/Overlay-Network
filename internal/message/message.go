@@ -11,6 +11,7 @@ type MessageType uint16
 
 const (
 	NetNewNodeJoin MessageType = iota
+	NetNewNodeJoinConfirm
 	NetNewNodeJoinQuery
 	NetLifeLine
 	NetDeathAnnouncement
@@ -20,6 +21,8 @@ func (mt MessageType) String() string {
 	switch mt {
 	case NetNewNodeJoin:
 		return "NetNewNodeJoin"
+	case NetNewNodeJoinConfirm:
+		return "NetNewNodeJoinConfirm"
 	case NetNewNodeJoinQuery:
 		return "NetNewNodeJoinQuery"
 	case NetLifeLine:
@@ -76,11 +79,20 @@ func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender IpPor
 
 // NetNewNodeJoinMessage is the message a node receives when a new node has queried and find a place to attach.
 type NetNewNodeJoinMessage struct {
-	JoinedNode   IpPortPair `json:"JoinedNode"`
+	JoiningNode  IpPortPair `json:"JoiningNode"`
 	AttachedNode IpPortPair `json:"AttachedNode"`
 }
 
 func (msg *NetNewNodeJoinMessage) Serialize() ([]byte, error) {
+	return json.Marshal(msg)
+}
+
+// NetNewNodeJoinConfirmMessage is the message that a node will receive when a new node determines that this node is the best place to attach
+type NetNewNodeJoinConfirmMessage struct {
+	IsSuitable bool `json:"IsSuitable"`
+}
+
+func (msg *NetNewNodeJoinConfirmMessage) Serialize() ([]byte, error) {
 	return json.Marshal(msg)
 }
 

@@ -97,6 +97,14 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		n.processDeathAnnouncementMessage(&msg, msgEnv.Sender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
+	case message.NetNewNodeJoinConfirm:
+		msg := message.NetNewNodeJoinConfirmMessage{}
+		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
+			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
+		}
+		n.processNetNewNodeJoinConfirmMessage(&msg, msgEnv.Sender)
+		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
+		return nil
 	default:
 		return fmt.Errorf("unknown message type: %d", msgEnv.Type)
 	}

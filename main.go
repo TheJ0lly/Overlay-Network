@@ -5,8 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/logging"
@@ -52,11 +52,11 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		logging.LogErrorWithExit("could not marshal initial message envelope for joining a new network - %s", err)
 	}
 
-	sourceIp := net.JoinHostPort(*connectionIp, fmt.Sprintf("%d", *connectionPort))
+	connectionPair := net.JoinHostPort(*connectionIp, fmt.Sprintf("%d", *connectionPort))
 	if err = currNode.SendMessageToIp(b, parsedIp, uint16(*connectionPort)); err != nil {
-		logging.LogErrorWithExit("could not sent message envelope to node %s", sourceIp)
+		logging.LogErrorWithExit("could not sent message envelope to node %s", connectionPair)
 	}
-	logging.LogInfo("sent message to %s: type=%s data=%s", sourceIp, env.Type, env.Data)
+	logging.LogInfo("sent message to %s: type=%s data=%s", connectionPair, env.Type, env.Data)
 
 	if list, err = net.Listen("tcp", currNode.GetNodeAddress()); err != nil {
 		logging.LogErrorWithExit("could not start listener for the initial message - %s", err)
@@ -70,9 +70,13 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	}()
 
 	running := true
-	var bestIp net.IP = nil
-	var bestPort uint16 = 0
-	bestTime := int64(math.MaxInt64)
+
+	type ResponiveNode struct {
+		pair      message.IpPortPair
+		timestamp int64
+	}
+
+	var responsiveNodes []ResponiveNode
 
 	for running {
 		select {
@@ -104,57 +108,141 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 				continue
 			}
 
-			if newTime := msg.Timestamp - initialTimestamp; newTime < bestTime {
-				bestIp = net.ParseIP(msg.NewNode.Ip.String())
-				bestPort = msg.NewNode.Port
-				bestTime = newTime
-				logging.LogDebug("found better node to attach to - ip: %s - port: %d", bestIp, bestPort)
-			}
+			responsiveNodes = append(responsiveNodes, ResponiveNode{
+				pair: message.IpPortPair{
+					Ip:   msg.NewNode.Ip,
+					Port: msg.NewNode.Port,
+				},
+				timestamp: msg.Timestamp - initialTimestamp,
+			})
 		}
 	}
-	if bestIp == nil || bestPort == 0 {
+
+	if len(responsiveNodes) == 0 {
 		logging.LogErrorWithExit("could not find a suitable node to attach to")
 	}
 
-	logging.LogInfo("found best node to attach to - ip: %s - port: %d", bestIp, bestPort)
+	confirmEnv, err := message.CreateMessageEnvelope(
+		message.NetNewNodeJoinConfirm,
+		&message.NetNewNodeJoinConfirmMessage{
+			// As of now does not matter, but maybe we add some RTT exclusion over X
+			IsSuitable: true,
+		},
+		message.IpPortPair{
+			Ip:   currNode.Ip,
+			Port: currNode.Port,
+		})
+
+	if err != nil {
+		logging.LogErrorWithExit("could not create message envelope for join confirm: %s", err)
+	}
+
+	confirmEnvBytes, err := message.SerializeMessageEnvelope(&confirmEnv)
+	if err != nil {
+		logging.LogErrorWithExit("could not serialize net join message - %s", err)
+	}
+
+	if list, err = net.Listen("tcp", currNode.GetNodeAddress()); err != nil {
+		logging.LogErrorWithExit("could not start listener for the initial message - %s", err)
+	}
+	defer list.Close()
+
+	slices.SortStableFunc(responsiveNodes, func(a, b ResponiveNode) int {
+		return int(a.timestamp - b.timestamp)
+	})
+
+	var bestNode message.IpPortPair
+
+	running = true
+	for i := range responsiveNodes {
+		// At this point we assume that the slice is sorted based on timestamp.
+		// Thus if we iterate over the slice, we should get the best candidates.
+		bestIp := responsiveNodes[i].pair.Ip
+		bestPort := responsiveNodes[i].pair.Port
+
+		if err = currNode.SendMessageToIp(confirmEnvBytes, bestIp, bestPort); err != nil {
+			logging.LogErrorWithExit("could not send net join message - %s", err)
+		}
+		logging.LogInfo("sent message to responsive node %s: type=%s data=%s", net.JoinHostPort(bestIp.String(), fmt.Sprintf("%d", bestPort)), confirmEnv.Type, confirmEnv.Data)
+
+		// Here we should handle timeout => 3 * RTT window
+		conn, err := list.Accept()
+		if err != nil {
+			logging.LogError("%s", err)
+			conn.Close()
+			continue
+		}
+
+		b, err := io.ReadAll(conn)
+		if err != nil {
+			logging.LogError("could not read all bytes: %s", err)
+			conn.Close()
+			continue
+		}
+
+		confirmEnvRespEnv := message.MessageEnvelope{}
+
+		if err := json.Unmarshal(b, &confirmEnvRespEnv); err != nil {
+			logging.LogError("could not unmarshal message envelope: %s", err)
+			conn.Close()
+			continue
+		}
+
+		msg := message.NetNewNodeJoinConfirmMessage{}
+		if err := json.Unmarshal(confirmEnvRespEnv.Data, &msg); err != nil {
+			logging.LogError("could not unmarshal message: %s", err)
+			conn.Close()
+			continue
+		}
+
+		if !msg.IsSuitable {
+			logging.LogInfo("candidate node %v refused attachment - moving on", responsiveNodes[i].pair)
+			continue
+		}
+
+		// Maybe we replace this with a message, but maybe not
+		if cap(currNode.Conns) > len(currNode.Conns) {
+			if newNode, err := node.Create(bestIp.String(), bestPort, 0, 0); err != nil {
+				logging.LogError("could not add the new node: %s - moving on", err)
+				continue
+			} else {
+				currNode.Conns = append(currNode.Conns, newNode)
+				bestNode.Ip = bestIp
+				bestNode.Port = bestPort
+				logging.LogDebug("added new node - %s", newNode)
+				logging.LogDebug("attached node state - %s", currNode)
+				// Here we break out of the loop since we found a good node and it confirmed the attachment.
+				break
+			}
+		}
+
+	}
 
 	if env, err = message.CreateMessageEnvelope(
 		message.NetNewNodeJoin,
 		&message.NetNewNodeJoinMessage{
 			AttachedNode: message.IpPortPair{
-				Ip:   net.ParseIP(bestIp.String()),
-				Port: bestPort,
+				Ip:   bestNode.Ip,
+				Port: bestNode.Port,
 			},
-			JoinedNode: message.IpPortPair{
+			JoiningNode: message.IpPortPair{
 				Ip:   net.ParseIP(*ip),
 				Port: uint16(*port),
 			},
 		},
 		message.IpPortPair{
-			Ip:   currNode.Ip,
-			Port: currNode.Port,
+			Ip:   net.ParseIP(*ip),
+			Port: uint16(*port),
 		},
 	); err != nil {
-		logging.LogErrorWithExit("could not create net join message envelope - %s", err)
-	}
+		logging.LogErrorWithExit("could not create the join message envelope: %s", err)
+	} else {
+		if b, err = message.SerializeMessageEnvelope(&env); err != nil {
+			logging.LogErrorWithExit("could not serialize the join message envelope: %s", err)
+		}
 
-	if b, err = message.SerializeMessageEnvelope(&env); err != nil {
-		logging.LogErrorWithExit("could not serialize net join message - %s", err)
-	}
-
-	if err = currNode.SendMessageToIp(b, bestIp, bestPort); err != nil {
-		logging.LogErrorWithExit("could not send net join message - %s", err)
-	}
-	logging.LogInfo("sent message to %s: type=%s data=%s", net.JoinHostPort(bestIp.String(), fmt.Sprintf("%d", bestPort)), env.Type, env.Data)
-
-	// Maybe we replace this with a message, but maybe not
-	if cap(currNode.Conns) > len(currNode.Conns) {
-		if newNode, err := node.Create(bestIp.String(), bestPort, 0, 0); err != nil {
-			logging.LogErrorWithExit("could not add the new node to the current node - %s", err)
-		} else {
-			currNode.Conns = append(currNode.Conns, newNode)
-			logging.LogDebug("added new node - %s", newNode)
-			logging.LogDebug("attached node state - %s", currNode)
+		if err = currNode.SendMessageToIp(b, bestNode.Ip, bestNode.Port); err != nil {
+			logging.LogErrorWithExit("could not send join message: %s", err)
 		}
 	}
 }
