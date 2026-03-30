@@ -8,14 +8,29 @@ import (
 )
 
 type MessageQueue[T any] struct {
-	q []T
+	q      []T
+	notify chan struct{}
 }
 
 func Create[T any](cap uint16) MessageQueue[T] {
 	logging.LogDebug("creating queue with capacity: %d", cap)
 	return MessageQueue[T]{
-		q: make([]T, 0, cap),
+		q:      make([]T, 0, cap),
+		notify: make(chan struct{}, 1),
 	}
+}
+
+// Notify is used to send a notification to the queue, that there is at least one item.
+func (mq *MessageQueue[T]) Notify() {
+	select {
+	case mq.notify <- struct{}{}:
+	default:
+	}
+}
+
+// Wait is used as a blocking operation until there is at least one item in the queue.
+func (mq *MessageQueue[T]) Wait() {
+	<-mq.notify
 }
 
 func (mq *MessageQueue[T]) PopFront() T {

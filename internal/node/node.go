@@ -73,7 +73,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.ProcessNetNewNodeJoinMessage(&msg, msgEnv.Sender)
+		n.processNetNewNodeJoinMessage(&msg, msgEnv.Sender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetNewNodeJoinQuery:
@@ -81,12 +81,19 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.ProcessNetNewNodeQueryMessage(&msg, msgEnv.Sender)
+		n.processNetNewNodeQueryMessage(&msg, msgEnv.Sender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetLifeLine:
-		n.ProcessNetLifeLineMessage(msgEnv.Sender)
+		n.processNetLifeLineMessage(msgEnv.Sender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
+		return nil
+	case message.NetDeathAnnouncement:
+		msg := message.NetDeathAnnouncementMessage{}
+		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
+			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
+		}
+		n.processDeathAnnouncementMessage(&msg, msgEnv.Sender)
 		return nil
 	default:
 		return fmt.Errorf("unknown message type: %d", msgEnv.Type)
@@ -96,9 +103,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 // processMessageGoroutine handles the queue of messages and processes them.
 func (n *Node) processMessageGoroutine() {
 	for {
-		if n.Queue.Length() == 0 {
-			continue
-		}
+		n.Queue.Wait()
 		msg := n.Queue.PopFront()
 
 		logging.LogInfo("started processing new message: type=%s data=%s sender=%v", msg.Type, msg.Data, msg.Sender)
@@ -275,6 +280,7 @@ func (n *Node) MainLoop() error {
 			logging.LogInfo("message queue error: %s", err)
 			continue
 		}
+		n.Queue.Notify()
 	}
 }
 

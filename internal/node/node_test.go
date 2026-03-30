@@ -10,8 +10,10 @@ import (
 
 func createNetNewNodeJoinMessage(ip string) message.NetNewNodeJoinMessage {
 	return message.NetNewNodeJoinMessage{
-		JoinedIp:   net.ParseIP(ip),
-		JoinedPort: 8080,
+		JoinedNode: message.IpPortPair{
+			Ip:   net.ParseIP(ip),
+			Port: 8080,
+		},
 	}
 }
 

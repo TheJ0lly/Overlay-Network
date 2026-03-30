@@ -9,7 +9,7 @@ import (
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
 )
 
-func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender message.IpPortPair) {
+func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender message.IpPortPair) {
 	// Here it is okay to create the node with queue and conn capacity 0, because this is a mock node.
 	// It's queue won't be used. Maybe make another method? TODO
 	newNode, err := Create(msg.JoinedNode.Ip.String(), msg.JoinedNode.Port, 0, 0)
@@ -61,7 +61,7 @@ func (n *Node) ProcessNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 	}
 }
 
-func (n *Node) ProcessNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender message.IpPortPair) {
+func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender message.IpPortPair) {
 	var env message.MessageEnvelope
 	var b []byte
 	var err error
@@ -127,7 +127,7 @@ func (n *Node) ProcessNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 	}
 }
 
-func (n *Node) ProcessNetLifeLineMessage(sender message.IpPortPair) {
+func (n *Node) processNetLifeLineMessage(sender message.IpPortPair) {
 	if nd := n.findNodeBasedOnIpAndPort(sender.Ip.String(), sender.Port); nd == nil {
 		logging.LogDebug("could not find node: %s:%d", sender.Ip.String(), sender.Port)
 		return
@@ -137,4 +137,30 @@ func (n *Node) ProcessNetLifeLineMessage(sender message.IpPortPair) {
 	}
 	logging.LogDebug("received lifeline for node: %s:%d", sender.Ip.String(), sender.Port)
 
+}
+
+func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncementMessage, sender message.IpPortPair) {
+	shouldUpdateTheOtherNode := false
+	for i := range msg.DeadNodes {
+		deadNode := msg.DeadNodes[i]
+		if node := n.findNodeBasedOnIpAndPort(deadNode.Ip.String(), deadNode.Port); node != nil {
+			node.Alive = false
+			shouldUpdateTheOtherNode = true
+		}
+		logging.LogDebug("the dead node %v is not known", deadNode)
+	}
+
+	if shouldUpdateTheOtherNode {
+		if env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, msg, message.IpPortPair{
+			Ip:   n.Ip,
+			Port: n.Port,
+		}); err != nil {
+			logging.LogError("could not recreate death announcement envelope: %s", err)
+		} else {
+			err = n.ForwardMessage(&env, sender)
+			if err != nil {
+				logging.LogError("death announcement: %s", err)
+			}
+		}
+	}
 }
