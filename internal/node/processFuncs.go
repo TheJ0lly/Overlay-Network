@@ -19,13 +19,6 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		return
 	}
 
-	// We update the node that is being attached to, if we find it in our local view
-	if attachNode := n.findNodeBasedOnIpAndPort(msg.AttachedNode.Ip.String(), msg.AttachedNode.Port); attachNode != nil {
-		attachNode.Conns = append(attachNode.Conns, newNode)
-		logging.LogDebug("added new node - %s", newNode)
-		logging.LogDebug("attached node state - %s", attachNode)
-	}
-
 	env, err := message.CreateMessageEnvelope(
 		message.NetNewNodeJoin,
 		msg,
@@ -44,13 +37,42 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 	// It means we are the node that is being attached to, we need to skip the sender node
 	// As they append us themselves.
 	if msg.AttachedNode.Ip.String() == n.Ip.String() && msg.AttachedNode.Port == n.Port {
+		logging.LogDebug("we are the node that is being attached to")
 		skipNodeIp = newNode.Ip.String()
 		skipNodePort = newNode.Port
+
 		// If we receive a join message with us being the attached node, it means we can remove the entry from the ongoing join queries list
 		n.Stat.JoinQueriesOngoing = slices.DeleteFunc(n.Stat.JoinQueriesOngoing, func(pair message.IpPortPair) bool {
 			return message.CompareIpPortPair(message.IpPortPair{Ip: newNode.Ip, Port: newNode.Port}, pair)
 		})
-		logging.LogDebug("we are the node that is being attached to")
+
+		if len(n.Conns) == cap(n.Conns) {
+			if idx := slices.IndexFunc(n.Conns, func(nod *Node) bool {
+				return nod.Alive
+			}); idx != -1 {
+				logging.LogDebug("replacing dead node %v with node %v", message.IpPortPair{
+					Ip:   n.Conns[idx].Ip,
+					Port: n.Conns[idx].Port,
+				}, message.IpPortPair{
+					Ip:   newNode.Ip,
+					Port: newNode.Port,
+				})
+				n.Conns[idx] = newNode
+			}
+		} else {
+			logging.LogDebug("added new node - %s", newNode)
+			n.Conns = append(n.Conns, newNode)
+		}
+		logging.LogDebug("attached node state - %s", n)
+
+	} else {
+		// Here we should add a new field in the message to signal the replaced node, and make a function AddOrReplaceNode that encapsulates the above behaviour.
+		// We update the node that is being attached to, if we find it in our local view
+		if attachNode := n.findNodeBasedOnIpAndPort(msg.AttachedNode.Ip.String(), msg.AttachedNode.Port); attachNode != nil {
+			attachNode.Conns = append(attachNode.Conns, newNode)
+			logging.LogDebug("added new node - %s", newNode)
+			logging.LogDebug("attached node state - %s", attachNode)
+		}
 	}
 
 	if err = n.ForwardMessage(
@@ -218,7 +240,7 @@ func (n *Node) processNetNewNodeJoinConfirmMessage(msg *message.NetNewNodeJoinCo
 
 	if cap(n.Conns) == len(n.Conns) {
 		logging.LogDebug("capacity of primary connections is full! checking for dead nodes")
-		if len(n.findDeadNodes()) == 0 {
+		if len(n.findExistingDeadNodes()) == 0 {
 			logging.LogDebug("there is no dead node to replace")
 			goto notSuitable
 		}
@@ -228,10 +250,12 @@ func (n *Node) processNetNewNodeJoinConfirmMessage(msg *message.NetNewNodeJoinCo
 		logging.LogError("could not send confirm message: %s", err)
 	}
 	n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, sender)
+	logging.LogDebug("sent confirm message with SUITABLE")
 	return
 
 notSuitable:
 	if err = n.SendMessageToIp(notSuitableBytes, sender.Ip, sender.Port); err != nil {
 		logging.LogError("could not send confirm message: %s", err)
 	}
+	logging.LogDebug("sent confirm message with NOT SUITABLE")
 }

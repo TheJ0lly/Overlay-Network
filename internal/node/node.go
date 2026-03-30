@@ -169,8 +169,22 @@ func (n *Node) checkQueueForLifelinesForDeadNodes(deadNodes []message.IpPortPair
 	})
 }
 
-// findDeadNodes will get the IpPortPair of each node that has (time.Now - LastTimeAlive) > DeathTimer.
-func (n *Node) findDeadNodes() []message.IpPortPair {
+func (n *Node) findExistingDeadNodes() []message.IpPortPair {
+	var deadNodes []message.IpPortPair = nil
+	for i := range n.Conns {
+		pConn := n.Conns[i]
+		if pConn.Alive == false {
+			deadNodes = append(deadNodes, message.IpPortPair{
+				Ip:   pConn.Ip,
+				Port: pConn.Port,
+			})
+		}
+	}
+	return n.checkQueueForLifelinesForDeadNodes(deadNodes)
+}
+
+// findNewDeadNodes will get the IpPortPair of each node that has (time.Now - LastTimeAlive) > DeathTimer.
+func (n *Node) findNewDeadNodes() []message.IpPortPair {
 	d := time.Second * time.Duration(n.DeathTimer)
 	now := time.Now().UnixMilli()
 
@@ -178,11 +192,12 @@ func (n *Node) findDeadNodes() []message.IpPortPair {
 	for i := range n.Conns {
 		pConn := n.Conns[i]
 		if pConn.Alive == false {
-			logging.LogDebug("jumping over dead node: %v - %v", pConn.Ip, pConn.Port)
+			logging.LogDebug("jumping over already dead node: %v - %v", pConn.Ip, pConn.Port)
 			continue
 		}
 
 		if (now - pConn.LastTimeAlive) > d.Milliseconds() {
+			logging.LogDebug("found possible dead node")
 			deadNodes = append(deadNodes, message.IpPortPair{
 				Ip:   pConn.Ip,
 				Port: pConn.Port,
@@ -201,7 +216,7 @@ func (n *Node) setNodesDead(deadNodes []message.IpPortPair) {
 
 		if slices.ContainsFunc(deadNodes, func(deadNode message.IpPortPair) bool {
 			return message.CompareIpPortPair(deadNode, connPair)
-		}) {
+		}) && n.Conns[i].Alive == true {
 			logging.LogDebug("node has been marked as dead: %v - %v", n.Conns[i].Ip, n.Conns[i].Port)
 			n.Conns[i].Alive = false
 		}
@@ -241,7 +256,7 @@ func (n *Node) periodicalMessagesLoop() {
 			n.sendLife()
 			n.resetLifelineTimer()
 		case <-deathTicker.C:
-			if deadNodes := n.findDeadNodes(); deadNodes != nil {
+			if deadNodes := n.findNewDeadNodes(); deadNodes != nil {
 				n.setNodesDead(deadNodes)
 				n.sendDeathAnnouncement(deadNodes)
 			}
