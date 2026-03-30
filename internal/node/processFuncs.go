@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/logging"
@@ -45,6 +46,10 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 	if msg.AttachedNode.Ip.String() == n.Ip.String() && msg.AttachedNode.Port == n.Port {
 		skipNodeIp = newNode.Ip.String()
 		skipNodePort = newNode.Port
+		// If we receive a join message with us being the attached node, it means we can remove the entry from the ongoing join queries list
+		n.Stat.JoinQueriesOngoing = slices.DeleteFunc(n.Stat.JoinQueriesOngoing, func(pair message.IpPortPair) bool {
+			return message.CompareIpPortPair(message.IpPortPair{Ip: newNode.Ip, Port: newNode.Port}, pair)
+		})
 		logging.LogDebug("we are the node that is being attached to")
 	}
 
@@ -90,13 +95,21 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 		return
 	}
 
-	if cap(n.Conns) > len(n.Conns) {
-		if err = n.SendMessageToIp(b, msg.NewNode.Ip, msg.NewNode.Port); err != nil {
-			logging.LogError("could not send join query response - %s", err)
-			return
-		}
+	if len(n.Stat.JoinQueriesOngoing) == cap(n.Conns) {
+		// possibly to be changed in the future.
+		// we can send some type of new message that signals to the joining node that resembles this flow:
+		// "OK, I have ongoing join queries, that if successful will fill my primary connections, try again in a few moments to see if I will have some space left"
+		logging.LogInfo("current node has as many ongoing join queries as maximum allowed - will not participate as a possible candidate")
 	} else {
-		logging.LogInfo("current node has reached its maximum primary connection capacity - will not participate as a possible candidate")
+		if cap(n.Conns) > len(n.Conns) {
+			if err = n.SendMessageToIp(b, msg.NewNode.Ip, msg.NewNode.Port); err != nil {
+				logging.LogError("could not send join query response - %s", err)
+				return
+			}
+			n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, msg.NewNode)
+		} else {
+			logging.LogInfo("current node has reached its maximum primary connection capacity - will not participate as a possible candidate")
+		}
 	}
 
 	// The forwarding begins

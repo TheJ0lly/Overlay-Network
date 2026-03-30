@@ -25,6 +25,7 @@ type Node struct {
 	LifeLineTicker *time.Ticker                                `json:"-"`
 	DeathTimer     uint8                                       `json:"-"`
 	LastTimeAlive  int64                                       `json:"-"`
+	Stat           Stats                                       `json:"-"`
 }
 
 func (n *Node) String() string {
@@ -94,6 +95,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
 		n.processDeathAnnouncementMessage(&msg, msgEnv.Sender)
+		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	default:
 		return fmt.Errorf("unknown message type: %d", msgEnv.Type)
@@ -348,9 +350,6 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 		}
 		logging.LogDebug("forwarded message to node: %s", conn.GetNodeAddress())
 	}
-	// Maybe in the future we will add some control variable so as to not do this all the time.
-	// n.resetLifelineTimer()
-	// logging.LogDebug("lifeline timer has been reset due to sending of message")
 	return nil
 }
 
