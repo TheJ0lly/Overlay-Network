@@ -95,20 +95,26 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 		return
 	}
 
-	if len(n.Stat.JoinQueriesOngoing) == cap(n.Conns) {
-		// possibly to be changed in the future.
-		// we can send some type of new message that signals to the joining node that resembles this flow:
-		// "OK, I have ongoing join queries, that if successful will fill my primary connections, try again in a few moments to see if I will have some space left"
-		logging.LogInfo("current node has as many ongoing join queries as maximum allowed - will not participate as a possible candidate")
-	} else {
-		if cap(n.Conns) > len(n.Conns) {
-			if err = n.SendMessageToIp(b, msg.NewNode.Ip, msg.NewNode.Port); err != nil {
-				logging.LogError("could not send join query response - %s", err)
-				return
-			}
-			n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, msg.NewNode)
+	isCurrentNodeCandidate := false
+
+	if cap(n.Conns) > len(n.Conns) {
+		if len(n.Stat.JoinQueriesOngoing) < cap(n.Conns)-len(n.Conns) {
+			isCurrentNodeCandidate = true
 		} else {
-			logging.LogInfo("current node has reached its maximum primary connection capacity - will not participate as a possible candidate")
+			// possibly to be changed in the future.
+			// we can send some type of new message that signals to the joining node that resembles this flow:
+			// "OK, I have ongoing join queries, that if successful will fill my primary connections, try again in a few moments to see if I will have some space left"
+			logging.LogInfo("current node has as many ongoing join queries as maximum allowed - will not participate as a possible candidate")
+		}
+	} else {
+		logging.LogInfo("current node has reached its maximum primary connection capacity - will not participate as a possible candidate")
+	}
+
+	if isCurrentNodeCandidate {
+		if err = n.SendMessageToIp(b, msg.NewNode.Ip, msg.NewNode.Port); err != nil {
+			logging.LogError("could not send join query response - %s", err)
+		} else {
+			n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, msg.NewNode)
 		}
 	}
 
