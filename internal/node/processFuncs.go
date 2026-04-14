@@ -19,19 +19,6 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		return
 	}
 
-	env, err := message.CreateMessageEnvelope(
-		message.NetNewNodeJoin,
-		msg,
-		message.IpPortPair{
-			Ip:   n.Ip,
-			Port: n.Port,
-		},
-	)
-	if err != nil {
-		logging.LogError("failed to serialize response to net join message - %s", err)
-		return
-	}
-
 	var skipNodeIp string = ""
 	var skipNodePort uint16 = 0
 	// It means we are the node that is being attached to, we need to skip the sender node
@@ -47,45 +34,54 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		})
 
 		if len(n.Conns) == cap(n.Conns) {
-			if idx := slices.IndexFunc(n.Conns, func(nod *Node) bool {
-				return nod.Alive
-			}); idx != -1 {
-				logging.LogDebug("replacing dead node %v with node %v", message.IpPortPair{
-					Ip:   n.Conns[idx].Ip,
-					Port: n.Conns[idx].Port,
-				}, message.IpPortPair{
-					Ip:   newNode.Ip,
-					Port: newNode.Port,
-				})
-				n.Conns[idx] = newNode
+			logging.LogDebug("We are at max capacity, looking for dead nodes")
+			if replacedNode := n.replaceFirstDeadNode(newNode); replacedNode != nil {
+				msg.ReplacedNode = replacedNode.getIpPortPair()
 			}
 		} else {
 			logging.LogDebug("added new node - %s", newNode)
 			n.Conns = append(n.Conns, newNode)
+			msg.ReplacedNode = message.NullIpPortPair
 		}
-		logging.LogDebug("attached node state - %s", n)
+		logging.LogDebug("1 attached node state - %s", n)
 
 	} else {
-		// Here we should add a new field in the message to signal the replaced node, and make a function AddOrReplaceNode that encapsulates the above behaviour.
-		// We update the node that is being attached to, if we find it in our local view
 		if attachNode := n.findNodeBasedOnIpAndPort(msg.AttachedNode.Ip.String(), msg.AttachedNode.Port); attachNode != nil {
-			attachNode.Conns = append(attachNode.Conns, newNode)
-			logging.LogDebug("added new node - %s", newNode)
-			logging.LogDebug("attached node state - %s", attachNode)
+			// If there is a replced node, it means we must find the node and replace its data
+			if !message.CompareIpPortPair(message.NullIpPortPair, msg.ReplacedNode) {
+				if replacedNode := attachNode.findNodeBasedOnIpAndPort(msg.ReplacedNode.Ip.String(), msg.ReplacedNode.Port); replacedNode != nil {
+					*replacedNode = *newNode
+				}
+			} else {
+				attachNode.Conns = append(attachNode.Conns, newNode)
+				logging.LogDebug("added new node - %s", newNode)
+				logging.LogDebug("2 attached node state - %s", attachNode)
+			}
 		}
 	}
 
-	if err = n.ForwardMessage(
+	env, err := message.CreateMessageEnvelope(
+		message.NetNewNodeJoin,
+		// Before creating the envelope, we should add the replaced dead node, if there is any
+		msg,
+		message.IpPortPair{
+			Ip:   n.Ip,
+			Port: n.Port,
+		},
+	)
+	if err != nil {
+		logging.LogError("failed to serialize response to net join message - %s", err)
+		return
+	}
+
+	go n.ForwardMessage(
 		&env,
 		message.IpPortPair{
 			Ip:   net.ParseIP(skipNodeIp),
 			Port: skipNodePort,
 		},
 		sender,
-	); err != nil {
-		logging.LogInfo("%s", err)
-		return
-	}
+	)
 }
 
 func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender message.IpPortPair) {
@@ -129,7 +125,7 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 
 	// We put both the original sender(the node who's joining) and the one possibly forwards the message to us.
 	// In the case of receiving the message directly from the joining node, the last 2 senders are the same.
-	if err = n.ForwardMessage(
+	go n.ForwardMessage(
 		&message.MessageEnvelope{
 			Type: message.NetNewNodeJoinQuery,
 			Data: b,
@@ -143,10 +139,7 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 			Port: msg.NewNode.Port,
 		},
 		sender,
-	); err != nil {
-		logging.LogInfo("%s", err)
-		return
-	}
+	)
 }
 
 func (n *Node) processNetLifeLineMessage(sender message.IpPortPair) {
@@ -162,32 +155,30 @@ func (n *Node) processNetLifeLineMessage(sender message.IpPortPair) {
 }
 
 func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncementMessage, sender message.IpPortPair) {
-	shouldUpdateTheOtherNode := false
+	shouldUpdateTheOtherNodes := false
 	for i := range msg.DeadNodes {
 		deadNode := msg.DeadNodes[i]
 		if node := n.findNodeBasedOnIpAndPort(deadNode.Ip.String(), deadNode.Port); node != nil {
 			node.Alive = false
-			shouldUpdateTheOtherNode = true
+			shouldUpdateTheOtherNodes = true
+			continue
 		}
 		logging.LogDebug("the dead node %v is not known", deadNode)
 	}
 
-	if shouldUpdateTheOtherNode {
+	if shouldUpdateTheOtherNodes {
 		if env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, msg, message.IpPortPair{
 			Ip:   n.Ip,
 			Port: n.Port,
 		}); err != nil {
 			logging.LogError("could not recreate death announcement envelope: %s", err)
 		} else {
-			err = n.ForwardMessage(&env, sender)
-			if err != nil {
-				logging.LogError("death announcement: %s", err)
-			}
+			go n.ForwardMessage(&env, sender)
 		}
 	}
 }
 
-func (n *Node) processNetNewNodeJoinConfirmMessage(msg *message.NetNewNodeJoinConfirmMessage, sender message.IpPortPair) {
+func (n *Node) processNetNewNodeJoinConfirmMessage(sender message.IpPortPair) {
 
 	notSuitableEnv, err := message.CreateMessageEnvelope(
 		message.NetNewNodeJoinConfirm,

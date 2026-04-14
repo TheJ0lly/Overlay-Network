@@ -102,7 +102,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.processNetNewNodeJoinConfirmMessage(&msg, msgEnv.Sender)
+		n.processNetNewNodeJoinConfirmMessage(msgEnv.Sender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	default:
@@ -149,11 +149,8 @@ func (n *Node) sendLife() {
 	}
 
 	// Here there are no nodes we should skip, as this is an initiator message coming from this node.
-	if err = n.ForwardMessage(&env); err != nil {
-		logging.LogDebug("lifeline error: %s", err)
-		return
-	}
-	logging.LogDebug("lifeline sent")
+	logging.LogDebug("sending lifeline")
+	go n.ForwardMessage(&env)
 }
 
 // checkQueueForLifelinesForDeadNodes will get the nodes marked as dead, and check if there are lifelines in the queue.
@@ -192,12 +189,11 @@ func (n *Node) findNewDeadNodes() []message.IpPortPair {
 	for i := range n.Conns {
 		pConn := n.Conns[i]
 		if pConn.Alive == false {
-			logging.LogDebug("jumping over already dead node: %v - %v", pConn.Ip, pConn.Port)
 			continue
 		}
 
 		if (now - pConn.LastTimeAlive) > d.Milliseconds() {
-			logging.LogDebug("found possible dead node")
+			logging.LogDebug("found possible dead node: %v", now-pConn.LastTimeAlive)
 			deadNodes = append(deadNodes, message.IpPortPair{
 				Ip:   pConn.Ip,
 				Port: pConn.Port,
@@ -238,11 +234,8 @@ func (n *Node) sendDeathAnnouncement(deadNodes []message.IpPortPair) {
 		return
 	}
 
-	if err = n.ForwardMessage(&env, deadNodes...); err != nil {
-		logging.LogError("could not forward death annoucement: %s", err)
-		return
-	}
-	logging.LogInfo("death announcement sent for: %v", deadNodes)
+	logging.LogInfo("sending death announcement for: %v", deadNodes)
+	go n.ForwardMessage(&env, deadNodes...)
 }
 
 // periodicalMessagesLoop is a method that will run in parallel to the main loop, and it will be used as the main place where messages/protocols are initiated.
@@ -285,11 +278,11 @@ func (n *Node) MainLoop() error {
 			logging.LogError("%s", err)
 			return err
 		}
-		defer conn.Close()
 
 		b, err := io.ReadAll(conn)
 		if err != nil {
 			logging.LogError("%s", err)
+			conn.Close()
 			return err
 		}
 
@@ -299,12 +292,16 @@ func (n *Node) MainLoop() error {
 		if err != nil {
 			// Maybe add some RESEND/ACK convention for messages TODO
 			logging.LogError("%s", err)
+			conn.Close()
+			continue
 		}
 
 		if err = n.Queue.Append(env); err != nil {
 			logging.LogInfo("message queue error: %s", err)
+			conn.Close()
 			continue
 		}
+		conn.Close()
 		n.Queue.Notify()
 	}
 }
@@ -312,7 +309,7 @@ func (n *Node) MainLoop() error {
 func (n *Node) SendMessageToIp(msg []byte, ip net.IP, port uint16) error {
 	destNodeIp := net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port))
 
-	conn, err := net.Dial("tcp", destNodeIp)
+	conn, err := net.DialTimeout("tcp", destNodeIp, time.Second*time.Duration(n.DeathTimer))
 	if err != nil {
 		return fmt.Errorf("cannot send message to node %s - %s", destNodeIp, err)
 	}
@@ -338,14 +335,16 @@ func (n *Node) GetNodeAddress() string {
 	return net.JoinHostPort(n.Ip.String(), fmt.Sprintf("%d", n.Port))
 }
 
-func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...message.IpPortPair) error {
+func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...message.IpPortPair) {
 	if len(n.Conns) == 0 {
-		return fmt.Errorf("cannot forward, no other nodes connected to this node")
+		logging.LogError("cannot forward, no other nodes connected to this node")
+		return
 	}
 
 	b, err := message.SerializeMessageEnvelope(env)
 	if err != nil {
-		return fmt.Errorf("cannot forward, cannot serialize original envelope")
+		logging.LogError("cannot forward, cannot serialize original envelope")
+		return
 	}
 
 	for i := range n.Conns {
@@ -373,7 +372,6 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 		}
 		logging.LogDebug("forwarded message to node: %s", conn.GetNodeAddress())
 	}
-	return nil
 }
 
 func (n *Node) findNodeBasedOnIpAndPort(ip string, port uint16) *Node {
@@ -405,6 +403,32 @@ func findNodeBasedOnIpAndPortInNode(node *Node, ip string, port uint16) *Node {
 		if toRet := findNodeBasedOnIpAndPortInNode(conn, ip, port); toRet != nil {
 			return toRet
 		}
+	}
+	return nil
+}
+
+func (n *Node) getIpPortPair() message.IpPortPair {
+	return message.IpPortPair{
+		Ip:   n.Ip,
+		Port: n.Port,
+	}
+}
+
+func (n *Node) replaceFirstDeadNode(newNode *Node) *Node {
+	if idx := slices.IndexFunc(n.Conns, func(nod *Node) bool {
+		logging.LogDebug("Node %v is alive? %v", nod.getIpPortPair(), nod.Alive)
+		return !nod.Alive
+	}); idx != -1 {
+		logging.LogDebug("replacing dead node %v with node %v", message.IpPortPair{
+			Ip:   n.Conns[idx].Ip,
+			Port: n.Conns[idx].Port,
+		}, message.IpPortPair{
+			Ip:   newNode.Ip,
+			Port: newNode.Port,
+		})
+		oldNode := n.Conns[idx]
+		n.Conns[idx] = newNode
+		return oldNode
 	}
 	return nil
 }

@@ -40,6 +40,11 @@ type IpPortPair struct {
 	Port uint16 `json:"Port"`
 }
 
+var NullIpPortPair = IpPortPair{
+	Ip:   net.ParseIP("0.0.0.0"),
+	Port: 0,
+}
+
 func CompareIpPortPair(p1, p2 IpPortPair) bool {
 	return slices.Compare(p1.Ip, p2.Ip) == 0 && p1.Port == p2.Port
 }
@@ -81,6 +86,7 @@ func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender IpPor
 type NetNewNodeJoinMessage struct {
 	JoiningNode  IpPortPair `json:"JoiningNode"`
 	AttachedNode IpPortPair `json:"AttachedNode"`
+	ReplacedNode IpPortPair `json:"ReplacedNode"`
 }
 
 func (msg *NetNewNodeJoinMessage) Serialize() ([]byte, error) {

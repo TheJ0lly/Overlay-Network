@@ -72,8 +72,8 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	running := true
 
 	type ResponiveNode struct {
-		pair      message.IpPortPair
-		timestamp int64
+		pair        message.IpPortPair
+		rttDuration int64
 	}
 
 	var responsiveNodes []ResponiveNode
@@ -108,12 +108,18 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 				continue
 			}
 
+			rttDuration := msg.Timestamp - initialTimestamp
+			if rttDuration <= 0 {
+				// a predefined 10 milliseconds mock RTT
+				rttDuration = 10
+			}
+
 			responsiveNodes = append(responsiveNodes, ResponiveNode{
 				pair: message.IpPortPair{
 					Ip:   msg.NewNode.Ip,
 					Port: msg.NewNode.Port,
 				},
-				timestamp: msg.Timestamp - initialTimestamp,
+				rttDuration: rttDuration,
 			})
 		}
 	}
@@ -142,16 +148,12 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		logging.LogErrorWithExit("could not serialize net join message - %s", err)
 	}
 
-	if list, err = net.Listen("tcp", currNode.GetNodeAddress()); err != nil {
-		logging.LogErrorWithExit("could not start listener for the initial message - %s", err)
-	}
-	defer list.Close()
-
 	slices.SortStableFunc(responsiveNodes, func(a, b ResponiveNode) int {
-		return int(a.timestamp - b.timestamp)
+		return int(a.rttDuration - b.rttDuration)
 	})
 
 	var bestNode message.IpPortPair
+	var gotConnChan chan struct{} = make(chan struct{}, 1)
 
 	running = true
 	for i := range responsiveNodes {
@@ -165,18 +167,39 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		}
 		logging.LogInfo("sent message to responsive node %s: type=%s data=%s", net.JoinHostPort(bestIp.String(), fmt.Sprintf("%d", bestPort)), confirmEnv.Type, confirmEnv.Data)
 
-		// Here we should handle timeout => 3 * RTT window
+		if list, err = net.Listen("tcp", currNode.GetNodeAddress()); err != nil {
+			logging.LogErrorWithExit("could not start listener for the initial message - %s", err)
+		}
+
+		// 3 * RTT is the window for accepting a new connection from a node.
+		go func() {
+			tick := time.NewTicker((time.Millisecond * time.Duration(responsiveNodes[i].rttDuration)) * 3)
+			select {
+			case <-gotConnChan:
+				tick.Stop()
+				logging.LogDebug("got a responsive node connected - timeout cancelled")
+				return
+			case <-tick.C:
+				logging.LogDebug("timeout for node - %v", responsiveNodes[i].pair)
+				timeoutChan <- struct{}{}
+				list.Close()
+			}
+		}()
+
 		conn, err := list.Accept()
 		if err != nil {
 			logging.LogError("%s", err)
 			conn.Close()
+			list.Close()
 			continue
 		}
+		gotConnChan <- struct{}{}
 
 		b, err := io.ReadAll(conn)
 		if err != nil {
 			logging.LogError("could not read all bytes: %s", err)
 			conn.Close()
+			list.Close()
 			continue
 		}
 
@@ -185,6 +208,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		if err := json.Unmarshal(b, &confirmEnvRespEnv); err != nil {
 			logging.LogError("could not unmarshal message envelope: %s", err)
 			conn.Close()
+			list.Close()
 			continue
 		}
 
@@ -192,11 +216,14 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		if err := json.Unmarshal(confirmEnvRespEnv.Data, &msg); err != nil {
 			logging.LogError("could not unmarshal message: %s", err)
 			conn.Close()
+			list.Close()
 			continue
 		}
 
 		if !msg.IsSuitable {
 			logging.LogInfo("candidate node %v refused attachment - moving on", responsiveNodes[i].pair)
+			conn.Close()
+			list.Close()
 			continue
 		}
 
@@ -204,20 +231,22 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		if cap(currNode.Conns) > len(currNode.Conns) {
 			if newNode, err := node.Create(bestIp.String(), bestPort, 0, 0); err != nil {
 				logging.LogError("could not add the new node: %s - moving on", err)
+				conn.Close()
+				list.Close()
 				continue
 			} else {
 				currNode.Conns = append(currNode.Conns, newNode)
+				newNode.LastTimeAlive = time.Now().UnixMilli()
 				bestNode.Ip = bestIp
 				bestNode.Port = bestPort
 				logging.LogDebug("added new node - %s", newNode)
 				logging.LogDebug("attached node state - %s", currNode)
+				list.Close()
 				// Here we break out of the loop since we found a good node and it confirmed the attachment.
 				break
 			}
 		}
-
 	}
-
 	if env, err = message.CreateMessageEnvelope(
 		message.NetNewNodeJoin,
 		&message.NetNewNodeJoinMessage{
@@ -229,6 +258,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 				Ip:   net.ParseIP(*ip),
 				Port: uint16(*port),
 			},
+			ReplacedNode: message.NullIpPortPair,
 		},
 		message.IpPortPair{
 			Ip:   net.ParseIP(*ip),
