@@ -55,11 +55,7 @@ func (n *Node) listen() (net.Listener, error) {
 
 func (n *Node) setLastAliveTimeForNode(pair message.IpPortPair, t int64) {
 	for i := range n.Conns {
-		connPair := message.IpPortPair{
-			Ip:   n.Conns[i].Ip,
-			Port: n.Conns[i].Port,
-		}
-		if message.CompareIpPortPair(connPair, pair) {
+		if message.CompareIpPortPair(n.Conns[i].GetIpPortPair(), pair) {
 			n.Conns[i].LastTimeAlive = t
 			logging.LogDebug("setting last time for node: %v - %v", pair, t)
 		}
@@ -137,10 +133,7 @@ func (n *Node) sendLife() {
 	env, err := message.CreateMessageEnvelope(
 		message.NetLifeLine,
 		&message.NetLifeLineMessage{},
-		message.IpPortPair{
-			Ip:   n.Ip,
-			Port: n.Port,
-		},
+		n.GetIpPortPair(),
 	)
 
 	if err != nil {
@@ -171,10 +164,7 @@ func (n *Node) findExistingDeadNodes() []message.IpPortPair {
 	for i := range n.Conns {
 		pConn := n.Conns[i]
 		if pConn.Alive == false {
-			deadNodes = append(deadNodes, message.IpPortPair{
-				Ip:   pConn.Ip,
-				Port: pConn.Port,
-			})
+			deadNodes = append(deadNodes, pConn.GetIpPortPair())
 		}
 	}
 	return n.checkQueueForLifelinesForDeadNodes(deadNodes)
@@ -194,10 +184,7 @@ func (n *Node) findNewDeadNodes() []message.IpPortPair {
 
 		if (now - pConn.LastTimeAlive) > d.Milliseconds() {
 			logging.LogDebug("found possible dead node: %v", now-pConn.LastTimeAlive)
-			deadNodes = append(deadNodes, message.IpPortPair{
-				Ip:   pConn.Ip,
-				Port: pConn.Port,
-			})
+			deadNodes = append(deadNodes, pConn.GetIpPortPair())
 		}
 	}
 	return n.checkQueueForLifelinesForDeadNodes(deadNodes)
@@ -205,15 +192,10 @@ func (n *Node) findNewDeadNodes() []message.IpPortPair {
 
 func (n *Node) setNodesDead(deadNodes []message.IpPortPair) {
 	for i := range n.Conns {
-		connPair := message.IpPortPair{
-			Ip:   n.Conns[i].Ip,
-			Port: n.Conns[i].Port,
-		}
-
 		if slices.ContainsFunc(deadNodes, func(deadNode message.IpPortPair) bool {
-			return message.CompareIpPortPair(deadNode, connPair)
+			return message.CompareIpPortPair(deadNode, n.Conns[i].GetIpPortPair())
 		}) && n.Conns[i].Alive == true {
-			logging.LogDebug("node has been marked as dead: %v - %v", n.Conns[i].Ip, n.Conns[i].Port)
+			logging.LogDebug("new node has been marked as dead: %v - %v", n.Conns[i].Ip, n.Conns[i].Port)
 			n.Conns[i].Alive = false
 		}
 	}
@@ -224,10 +206,7 @@ func (n *Node) sendDeathAnnouncement(deadNodes []message.IpPortPair) {
 
 	env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, &message.NetDeathAnnouncementMessage{
 		DeadNodes: deadNodes,
-	}, message.IpPortPair{
-		Ip:   n.Ip,
-		Port: n.Port,
-	})
+	}, n.GetIpPortPair())
 
 	if err != nil {
 		logging.LogError("could not create envelope for death announcement: %s", err)
@@ -349,9 +328,10 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 
 	for i := range n.Conns {
 		conn := n.Conns[i]
+		connIpPortPair := conn.GetIpPortPair()
 
 		// If the sender of the envelope is within our known connections, we skip sending it to him.
-		if (conn.Ip.String() == env.Sender.Ip.String() && conn.Port == env.Sender.Port) ||
+		if (message.CompareIpPortPair(connIpPortPair, env.Sender)) ||
 			conn.Alive == false {
 			logging.LogDebug("jumping over node: %s", conn.GetNodeAddress())
 			continue
@@ -359,7 +339,7 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 
 		// Now we look through the list of senders to skip
 		if slices.ContainsFunc(skipSenderList, func(sender message.IpPortPair) bool {
-			return conn.Ip.String() == sender.Ip.String() && conn.Port == sender.Port
+			return message.CompareIpPortPair(connIpPortPair, sender)
 		}) {
 			logging.LogDebug("jumping over node: %s", conn.GetNodeAddress())
 			continue
@@ -374,6 +354,7 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...me
 	}
 }
 
+// findNodeBasedOnIpAndPort finds a node through all visible nodes of the node searching.
 func (n *Node) findNodeBasedOnIpAndPort(ip string, port uint16) *Node {
 	if n.Ip.String() == ip && n.Port == port {
 		return n
@@ -393,6 +374,7 @@ func (n *Node) findNodeBasedOnIpAndPort(ip string, port uint16) *Node {
 	return nil
 }
 
+// findNodeBasedOnIpAndPortInNode this method is a helper method, and it should NOT EVER BE USED ALONE.
 func findNodeBasedOnIpAndPortInNode(node *Node, ip string, port uint16) *Node {
 	for i := range node.Conns {
 		conn := node.Conns[i]
@@ -407,7 +389,7 @@ func findNodeBasedOnIpAndPortInNode(node *Node, ip string, port uint16) *Node {
 	return nil
 }
 
-func (n *Node) getIpPortPair() message.IpPortPair {
+func (n *Node) GetIpPortPair() message.IpPortPair {
 	return message.IpPortPair{
 		Ip:   n.Ip,
 		Port: n.Port,
@@ -416,16 +398,10 @@ func (n *Node) getIpPortPair() message.IpPortPair {
 
 func (n *Node) replaceFirstDeadNode(newNode *Node) *Node {
 	if idx := slices.IndexFunc(n.Conns, func(nod *Node) bool {
-		logging.LogDebug("Node %v is alive? %v", nod.getIpPortPair(), nod.Alive)
+		logging.LogDebug("Node %v is alive? %v", nod.GetIpPortPair(), nod.Alive)
 		return !nod.Alive
 	}); idx != -1 {
-		logging.LogDebug("replacing dead node %v with node %v", message.IpPortPair{
-			Ip:   n.Conns[idx].Ip,
-			Port: n.Conns[idx].Port,
-		}, message.IpPortPair{
-			Ip:   newNode.Ip,
-			Port: newNode.Port,
-		})
+		logging.LogDebug("replacing dead node %v with node %v", n.Conns[idx].GetIpPortPair(), newNode.GetIpPortPair())
 		oldNode := n.Conns[idx]
 		n.Conns[idx] = newNode
 		return oldNode

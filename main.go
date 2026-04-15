@@ -34,16 +34,10 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	if env, err = message.CreateMessageEnvelope(
 		message.NetNewNodeJoinQuery,
 		&message.NetNewNodeJoinQueryMessage{
-			NewNode: message.IpPortPair{
-				Ip:   currNode.Ip,
-				Port: currNode.Port,
-			},
+			NewNode:   currNode.GetIpPortPair(),
 			Timestamp: initialTimestamp,
 		},
-		message.IpPortPair{
-			Ip:   currNode.Ip,
-			Port: currNode.Port,
-		},
+		currNode.GetIpPortPair(),
 	); err != nil {
 		logging.LogErrorWithExit("could not create join query message - %s", err)
 	}
@@ -94,17 +88,20 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			b, err = io.ReadAll(conn)
 			if err != nil {
 				logging.LogError("error while reading from the connection - %s", err)
+				conn.Close()
 				continue
 			}
 
 			if err = message.DeserializeMessageEnvelope(&env, b); err != nil {
 				logging.LogError("error while deserializing message envelope - %s", err)
+				conn.Close()
 				continue
 			}
 
 			msg := message.NetNewNodeJoinQueryMessage{}
 			if err := json.Unmarshal(env.Data, &msg); err != nil {
 				logging.LogError("error while deserializing message - %s", err)
+				conn.Close()
 				continue
 			}
 
@@ -134,10 +131,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			// As of now does not matter, but maybe we add some RTT exclusion over X
 			IsSuitable: true,
 		},
-		message.IpPortPair{
-			Ip:   currNode.Ip,
-			Port: currNode.Port,
-		})
+		currNode.GetIpPortPair())
 
 	if err != nil {
 		logging.LogErrorWithExit("could not create message envelope for join confirm: %s", err)
@@ -159,13 +153,12 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	for i := range responsiveNodes {
 		// At this point we assume that the slice is sorted based on timestamp.
 		// Thus if we iterate over the slice, we should get the best candidates.
-		bestIp := responsiveNodes[i].pair.Ip
-		bestPort := responsiveNodes[i].pair.Port
+		reNo := responsiveNodes[i]
 
-		if err = currNode.SendMessageToIp(confirmEnvBytes, bestIp, bestPort); err != nil {
+		if err = currNode.SendMessageToIp(confirmEnvBytes, reNo.pair.Ip, reNo.pair.Port); err != nil {
 			logging.LogErrorWithExit("could not send net join message - %s", err)
 		}
-		logging.LogInfo("sent message to responsive node %s: type=%s data=%s", net.JoinHostPort(bestIp.String(), fmt.Sprintf("%d", bestPort)), confirmEnv.Type, confirmEnv.Data)
+		logging.LogInfo("sent message to responsive node %s: type=%s data=%s", reNo.pair, confirmEnv.Type, confirmEnv.Data)
 
 		if list, err = net.Listen("tcp", currNode.GetNodeAddress()); err != nil {
 			logging.LogErrorWithExit("could not start listener for the initial message - %s", err)
@@ -180,16 +173,14 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 				logging.LogDebug("got a responsive node connected - timeout cancelled")
 				return
 			case <-tick.C:
-				logging.LogDebug("timeout for node - %v", responsiveNodes[i].pair)
-				timeoutChan <- struct{}{}
+				logging.LogInfo("timeout for node - %v", responsiveNodes[i].pair)
 				list.Close()
 			}
 		}()
 
-		conn, err := list.Accept()
+		conn, err = list.Accept()
 		if err != nil {
 			logging.LogError("%s", err)
-			conn.Close()
 			list.Close()
 			continue
 		}
@@ -229,7 +220,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 
 		// Maybe we replace this with a message, but maybe not
 		if cap(currNode.Conns) > len(currNode.Conns) {
-			if newNode, err := node.Create(bestIp.String(), bestPort, 0, 0); err != nil {
+			if newNode, err := node.Create(reNo.pair.Ip.String(), reNo.pair.Port, 0, 0); err != nil {
 				logging.LogError("could not add the new node: %s - moving on", err)
 				conn.Close()
 				list.Close()
@@ -237,11 +228,12 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			} else {
 				currNode.Conns = append(currNode.Conns, newNode)
 				newNode.LastTimeAlive = time.Now().UnixMilli()
-				bestNode.Ip = bestIp
-				bestNode.Port = bestPort
+				bestNode.Ip = reNo.pair.Ip
+				bestNode.Port = reNo.pair.Port
 				logging.LogDebug("added new node - %s", newNode)
 				logging.LogDebug("attached node state - %s", currNode)
 				list.Close()
+				conn.Close()
 				// Here we break out of the loop since we found a good node and it confirmed the attachment.
 				break
 			}
@@ -250,10 +242,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	if env, err = message.CreateMessageEnvelope(
 		message.NetNewNodeJoin,
 		&message.NetNewNodeJoinMessage{
-			AttachedNode: message.IpPortPair{
-				Ip:   bestNode.Ip,
-				Port: bestNode.Port,
-			},
+			AttachedNode: bestNode,
 			JoiningNode: message.IpPortPair{
 				Ip:   net.ParseIP(*ip),
 				Port: uint16(*port),

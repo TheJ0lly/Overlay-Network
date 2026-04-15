@@ -82,6 +82,18 @@ func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender IpPor
 	}
 }
 
+func SerializeNewMessageEnvelope(mt MessageType, msg SerializableMessage, sender IpPortPair) ([]byte, error) {
+	if b, err := msg.Serialize(); err != nil {
+		return nil, fmt.Errorf("failed to serialize message data - %s", err)
+	} else {
+		return SerializeMessageEnvelope(&MessageEnvelope{
+			Type:   mt,
+			Data:   b,
+			Sender: sender,
+		})
+	}
+}
+
 // NetNewNodeJoinMessage is the message a node receives when a new node has queried and find a place to attach.
 type NetNewNodeJoinMessage struct {
 	JoiningNode  IpPortPair `json:"JoiningNode"`
