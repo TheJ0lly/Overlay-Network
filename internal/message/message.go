@@ -3,8 +3,8 @@ package message
 import (
 	"encoding/json"
 	"fmt"
-	"net"
-	"slices"
+
+	"github.com/TheJ0lly/Overlay-Network/internal/network"
 )
 
 type MessageType uint16
@@ -34,26 +34,11 @@ func (mt MessageType) String() string {
 	}
 }
 
-// IpPortPair represents a pair of an IP and Port signaling who sent the message.
-type IpPortPair struct {
-	Ip   net.IP `json:"Ip"`
-	Port uint16 `json:"Port"`
-}
-
-var NullIpPortPair = IpPortPair{
-	Ip:   net.ParseIP("0.0.0.0"),
-	Port: 0,
-}
-
-func CompareIpPortPair(p1, p2 IpPortPair) bool {
-	return slices.Compare(p1.Ip, p2.Ip) == 0 && p1.Port == p2.Port
-}
-
 // MessageEnvelope covers the message such that it will be easier to find out what message type it contains.
 type MessageEnvelope struct {
-	Type   MessageType     `json:"Type"`
-	Data   json.RawMessage `json:"Data"`
-	Sender IpPortPair      `json:"Sender"`
+	Type   MessageType        `json:"Type"`
+	Data   json.RawMessage    `json:"Data"`
+	Sender network.IpPortPair `json:"Sender"`
 }
 
 // SerializeMessageEnvelope takes a message envelope and turns it into a byte slice.
@@ -70,7 +55,7 @@ type SerializableMessage interface {
 	Serialize() ([]byte, error)
 }
 
-func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender IpPortPair) (MessageEnvelope, error) {
+func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender network.IpPortPair) (MessageEnvelope, error) {
 	if b, err := msg.Serialize(); err != nil {
 		return MessageEnvelope{}, fmt.Errorf("failed to marshal message - %s", err)
 	} else {
@@ -82,7 +67,7 @@ func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender IpPor
 	}
 }
 
-func SerializeNewMessageEnvelope(mt MessageType, msg SerializableMessage, sender IpPortPair) ([]byte, error) {
+func SerializeNewMessageEnvelope(mt MessageType, msg SerializableMessage, sender network.IpPortPair) ([]byte, error) {
 	if b, err := msg.Serialize(); err != nil {
 		return nil, fmt.Errorf("failed to serialize message data - %s", err)
 	} else {
@@ -96,9 +81,9 @@ func SerializeNewMessageEnvelope(mt MessageType, msg SerializableMessage, sender
 
 // NetNewNodeJoinMessage is the message a node receives when a new node has queried and find a place to attach.
 type NetNewNodeJoinMessage struct {
-	JoiningNode  IpPortPair `json:"JoiningNode"`
-	AttachedNode IpPortPair `json:"AttachedNode"`
-	ReplacedNode IpPortPair `json:"ReplacedNode"`
+	JoiningNode  network.IpPortPair `json:"JoiningNode"`
+	AttachedNode network.IpPortPair `json:"AttachedNode"`
+	ReplacedNode network.IpPortPair `json:"ReplacedNode"`
 }
 
 func (msg *NetNewNodeJoinMessage) Serialize() ([]byte, error) {
@@ -117,25 +102,29 @@ func (msg *NetNewNodeJoinConfirmMessage) Serialize() ([]byte, error) {
 // NetNewNodeJoinQueryMessage is the message a node sends when joining a network for the FIRST TIME ever. It will also be used for RTT.
 // The fields represent the data of the sending node, since this message is used as a request and a response.
 type NetNewNodeJoinQueryMessage struct {
-	NewNode   IpPortPair `json:"NewNode"`
-	Timestamp int64      `json:"Timestamp"`
+	NewNode   network.IpPortPair `json:"NewNode"`
+	Timestamp int64              `json:"Timestamp"`
 }
 
 func (msg *NetNewNodeJoinQueryMessage) Serialize() ([]byte, error) {
 	return json.Marshal(msg)
 }
 
-type NetLifeLineMessage struct{}
+// TODO Add a field where it writes the IpPortPair which is supposed to be alive, because it's causing a lot of issues with the LIFELINE.
+// The sender of the envelope should change each time, but the alive node should remain the same.
+type NetLifeLineMessage struct {
+	Node network.IpPortPair `json:"Node"`
+}
 
 // NetLifeLineMessage is a message that will be sent periodically to let the other nodes that this node is alive.
 // The only data needed, as of now, for this type of message is the message type and the sender, so that we can link with the Death Certificate.
 // We can return (nil, nil) for now as we do not require any data in the actual message.
 func (msg *NetLifeLineMessage) Serialize() ([]byte, error) {
-	return nil, nil
+	return json.Marshal(msg)
 }
 
 type NetDeathAnnouncementMessage struct {
-	DeadNodes []IpPortPair `json:"DeadNodes"`
+	DeadNodes []network.IpPortPair `json:"DeadNodes"`
 }
 
 func (msg *NetDeathAnnouncementMessage) Serialize() ([]byte, error) {

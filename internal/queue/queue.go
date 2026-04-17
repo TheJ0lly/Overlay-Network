@@ -3,8 +3,6 @@ package queue
 import (
 	"fmt"
 	"slices"
-
-	"github.com/TheJ0lly/Overlay-Network/internal/logging"
 )
 
 type MessageQueue[T any] struct {
@@ -13,7 +11,6 @@ type MessageQueue[T any] struct {
 }
 
 func Create[T any](cap uint16) MessageQueue[T] {
-	logging.LogDebug("creating queue with capacity: %d", cap)
 	return MessageQueue[T]{
 		q:      make([]T, 0, cap),
 		notify: make(chan struct{}, 1),

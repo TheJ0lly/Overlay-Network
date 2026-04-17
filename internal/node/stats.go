@@ -1,7 +1,7 @@
 package node
 
-import "github.com/TheJ0lly/Overlay-Network/internal/message"
+import "github.com/TheJ0lly/Overlay-Network/internal/network"
 
 type Stats struct {
-	JoinQueriesOngoing []message.IpPortPair
+	JoinQueriesOngoing []network.IpPortPair
 }

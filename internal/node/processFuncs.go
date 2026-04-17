@@ -2,15 +2,15 @@ package node
 
 import (
 	"encoding/json"
-	"net"
 	"slices"
 	"time"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/logging"
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/network"
 )
 
-func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender message.IpPortPair) {
+func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender network.IpPortPair) {
 	// Here it is okay to create the node with queue and conn capacity 0, because this is a mock node.
 	// It's queue won't be used. Maybe make another method? TODO
 	newNode, err := Create(msg.JoiningNode.Ip.String(), msg.JoiningNode.Port, 0, 0)
@@ -19,45 +19,49 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		return
 	}
 
-	var skipNodeIp string = ""
-	var skipNodePort uint16 = 0
+	var skipNodes []network.IpPortPair = []network.IpPortPair{sender}
+
 	// It means we are the node that is being attached to, we need to skip the sender node
 	// As they append us themselves.
-	if message.CompareIpPortPair(msg.AttachedNode, n.GetIpPortPair()) {
+	var attachedNode *Node
+	if attachedNode = findNodeByIpPortPairInNode(n, msg.AttachedNode); attachedNode == nil {
+		logging.LogInfo("couldn't find attached node %s in visible nodes - skipping forwarding", msg.AttachedNode.NetString())
+		return
+	}
+
+	if network.CompareIpPortPair(attachedNode.GetIpPortPair(), n.GetIpPortPair()) {
 		logging.LogDebug("we are the node that is being attached to")
-		skipNodeIp = newNode.Ip.String()
-		skipNodePort = newNode.Port
+		skipNodes = append(skipNodes, newNode.GetIpPortPair())
+		attachedNode = n
 
 		// If we receive a join message with us being the attached node, it means we can remove the entry from the ongoing join queries list
-		n.Stat.JoinQueriesOngoing = slices.DeleteFunc(n.Stat.JoinQueriesOngoing, func(joinQueryOngoingPair message.IpPortPair) bool {
-			return message.CompareIpPortPair(newNode.GetIpPortPair(), joinQueryOngoingPair)
+		n.Stat.JoinQueriesOngoing = slices.DeleteFunc(n.Stat.JoinQueriesOngoing, func(joinQueryOngoingPair network.IpPortPair) bool {
+			return network.CompareIpPortPair(newNode.GetIpPortPair(), joinQueryOngoingPair)
 		})
 
 		if len(n.Conns) == cap(n.Conns) {
 			if replacedNode := n.replaceFirstDeadNode(newNode); replacedNode != nil {
+				// Here we should forward an update message to update the connections of the new node
+				logging.LogDebug("replacing dead node %v with node %v", replacedNode.GetIpPortPair(), newNode.GetIpPortPair())
 				msg.ReplacedNode = replacedNode.GetIpPortPair()
 			}
 		} else {
 			logging.LogDebug("added new node - %s", newNode)
 			n.Conns = append(n.Conns, newNode)
-			msg.ReplacedNode = message.NullIpPortPair
+			msg.ReplacedNode = network.NullIpPortPair
 		}
-		logging.LogDebug("attached node state - %s", n)
-
 	} else {
-		if attachNode := n.findNodeBasedOnIpAndPort(msg.AttachedNode.Ip.String(), msg.AttachedNode.Port); attachNode != nil {
-			// If there is a replced node, it means we must find the node and replace its data
-			if !message.CompareIpPortPair(message.NullIpPortPair, msg.ReplacedNode) {
-				if replacedNode := attachNode.findNodeBasedOnIpAndPort(msg.ReplacedNode.Ip.String(), msg.ReplacedNode.Port); replacedNode != nil {
-					*replacedNode = *newNode
-				}
-			} else {
-				attachNode.Conns = append(attachNode.Conns, newNode)
-				logging.LogDebug("added new node - %s", newNode)
-				logging.LogDebug("attached node state - %s", attachNode)
+		// If there is a replced node, it means we must find the node and replace its data
+		if !network.CompareIpPortPair(network.NullIpPortPair, msg.ReplacedNode) {
+			if replacedNode := findNodeByIpPortPairInNode(attachedNode, msg.ReplacedNode); replacedNode != nil {
+				*replacedNode = *newNode
 			}
+		} else {
+			attachedNode.Conns = append(attachedNode.Conns, newNode)
+			logging.LogDebug("added new node - %s", newNode)
 		}
 	}
+	logging.LogDebug("attached node state - %s", attachedNode)
 
 	env, err := message.CreateMessageEnvelope(
 		message.NetNewNodeJoin,
@@ -71,21 +75,16 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 
 	go n.ForwardMessage(
 		&env,
-		message.IpPortPair{
-			Ip:   net.ParseIP(skipNodeIp),
-			Port: skipNodePort,
-		},
-		sender,
+		skipNodes...,
 	)
 }
 
-func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender message.IpPortPair) {
-	var env message.MessageEnvelope
+func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender network.IpPortPair) {
 	var b []byte
 	var err error
 
 	// This is the response we send to the query.
-	if env, err = message.CreateMessageEnvelope(
+	if b, err = message.SerializeNewMessageEnvelope(
 		message.NetNewNodeJoinQuery,
 		&message.NetNewNodeJoinQueryMessage{
 			NewNode:   n.GetIpPortPair(),
@@ -97,12 +96,7 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 		return
 	}
 
-	if b, err = message.SerializeMessageEnvelope(&env); err != nil {
-		logging.LogError("cannot marshal query response envelope - will not proceed with new node query")
-		return
-	}
-
-	if err = n.SendMessageToIp(b, msg.NewNode.Ip, msg.NewNode.Port); err != nil {
+	if err = network.SendToDest(b, msg.NewNode, time.Duration(n.DeathTimer)); err != nil {
 		logging.LogError("could not send join query response - %s", err)
 	}
 
@@ -125,102 +119,69 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 	)
 }
 
-func (n *Node) processNetLifeLineMessage(sender message.IpPortPair) {
-	if nd := n.findNodeBasedOnIpAndPort(sender.Ip.String(), sender.Port); nd == nil {
-		logging.LogDebug("could not find node: %s:%d", sender.Ip.String(), sender.Port)
-		return
+func (n *Node) processNetLifeLineMessage(msg message.NetLifeLineMessage, sender network.IpPortPair) {
+	var nd *Node
+	if nd = findNodeByIpPortPairInNode(n, msg.Node); nd == nil {
+		logging.LogDebug("could not find node: %s", msg.Node.NetString())
 	} else {
 		nd.Alive = true
 		nd.LastTimeAlive = time.Now().UnixMilli()
 	}
-	logging.LogDebug("received lifeline for node: %s:%d", sender.Ip.String(), sender.Port)
+	logging.LogDebug("received lifeline for node: %s", sender.NetString())
+
+	if env, err := message.CreateMessageEnvelope(message.NetLifeLine, &msg, n.GetIpPortPair()); err != nil {
+		logging.LogError("could not recreate death announcement envelope: %s", err)
+	} else {
+		go n.ForwardMessage(&env, sender)
+	}
 
 }
 
-func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncementMessage, sender message.IpPortPair) {
-	shouldUpdateMyPrimaryConnections := false
+func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncementMessage, sender network.IpPortPair) {
 	for i := range msg.DeadNodes {
 		deadNode := msg.DeadNodes[i]
-		if node := n.findNodeBasedOnIpAndPort(deadNode.Ip.String(), deadNode.Port); node != nil {
+		if node := findNodeByIpPortPairInNode(n, deadNode); node != nil {
 			node.Alive = false
-			shouldUpdateMyPrimaryConnections = true
 			continue
 		}
 		logging.LogDebug("the dead node %v is not known", deadNode)
 	}
 
-	if shouldUpdateMyPrimaryConnections {
-		if env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, msg, n.GetIpPortPair()); err != nil {
-			logging.LogError("could not recreate death announcement envelope: %s", err)
-		} else {
-			go n.ForwardMessage(&env, sender)
-		}
+	if env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, msg, n.GetIpPortPair()); err != nil {
+		logging.LogError("could not recreate death announcement envelope: %s", err)
+	} else {
+		go n.ForwardMessage(&env, sender)
 	}
 }
 
-func (n *Node) processNetNewNodeJoinConfirmMessage(sender message.IpPortPair) {
-
-	notSuitableEnv, err := message.CreateMessageEnvelope(
-		message.NetNewNodeJoinConfirm,
-		&message.NetNewNodeJoinConfirmMessage{
-			IsSuitable: false,
-		},
-		n.GetIpPortPair(),
-	)
-	if err != nil {
-		logging.LogError("could not create join confirm envelope: %s", err)
-		return
+func (n *Node) processNetNewNodeJoinConfirmMessage(sender network.IpPortPair) {
+	confirmMessageData := message.NetNewNodeJoinConfirmMessage{
+		IsSuitable: true,
 	}
-
-	isSuitableEnv, err := message.CreateMessageEnvelope(
-		message.NetNewNodeJoinConfirm,
-		&message.NetNewNodeJoinConfirmMessage{
-			IsSuitable: true,
-		},
-		n.GetIpPortPair(),
-	)
-	if err != nil {
-		logging.LogError("could not create join confirm envelope: %s", err)
-		return
-	}
-
-	notSuitableBytes, err := message.SerializeMessageEnvelope(&notSuitableEnv)
-	if err != nil {
-		logging.LogError("could not serialize join confirm envelope: %s", err)
-		return
-	}
-
-	suitableBytes, err := message.SerializeMessageEnvelope(&isSuitableEnv)
-	if err != nil {
-		logging.LogError("could not serialize join confirm envelope: %s", err)
-		return
-	}
-
 	// Here I sense a bug, due to the fact that if a node indeed finishes the joing process before this, they should be a part of the new join query, but that adds a lot of concurrency problems.
 	// Will think about it.
 	if cap(n.Conns) > len(n.Conns) && len(n.Stat.JoinQueriesOngoing) != 0 && len(n.Stat.JoinQueriesOngoing)+len(n.Conns) >= cap(n.Conns) {
 		logging.LogError("current node has the maximum allowed number of ongoing join queries - will not participate as a candidate")
-		goto notSuitable
-	}
-
-	if cap(n.Conns) == len(n.Conns) {
+		confirmMessageData.IsSuitable = false
+	} else if cap(n.Conns) == len(n.Conns) {
 		logging.LogDebug("capacity of primary connections is full! checking for dead nodes")
 		if len(n.findExistingDeadNodes()) == 0 {
 			logging.LogDebug("there is no dead node to replace")
-			goto notSuitable
+			confirmMessageData.IsSuitable = false
 		}
 	}
 
-	if err = n.SendMessageToIp(suitableBytes, sender.Ip, sender.Port); err != nil {
+	var err error
+	var b []byte
+	if b, err = message.SerializeNewMessageEnvelope(message.NetNewNodeJoinConfirm, &confirmMessageData, n.GetIpPortPair()); err != nil {
+		logging.LogError("could not create join confirm envelope: %s", err)
+		return
+	}
+
+	if err = network.SendToDest(b, sender, time.Duration(n.DeathTimer)); err != nil {
 		logging.LogError("could not send confirm message: %s", err)
+		return
 	}
 	n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, sender)
-	logging.LogDebug("sent confirm message with SUITABLE")
-	return
-
-notSuitable:
-	if err = n.SendMessageToIp(notSuitableBytes, sender.Ip, sender.Port); err != nil {
-		logging.LogError("could not send confirm message: %s", err)
-	}
-	logging.LogDebug("sent confirm message with NOT SUITABLE")
+	logging.LogDebug("sent confirm message with isSuitable=%v", confirmMessageData.IsSuitable)
 }

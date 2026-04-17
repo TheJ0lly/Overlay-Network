@@ -6,11 +6,12 @@ import (
 	"testing"
 
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/network"
 )
 
 func createNetNewNodeJoinMessage(ip string) message.NetNewNodeJoinMessage {
 	return message.NetNewNodeJoinMessage{
-		JoiningNode: message.IpPortPair{
+		JoiningNode: network.IpPortPair{
 			Ip:   net.ParseIP(ip),
 			Port: 8080,
 		},

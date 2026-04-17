@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"net"
 	"slices"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/TheJ0lly/Overlay-Network/internal/logging"
 	"github.com/TheJ0lly/Overlay-Network/internal/message"
+	"github.com/TheJ0lly/Overlay-Network/internal/network"
 	"github.com/TheJ0lly/Overlay-Network/internal/node"
 )
 
@@ -24,6 +24,10 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	}
 
 	parsedIp := net.ParseIP(*connectionIp)
+	connectionIpPortPair := network.IpPortPair{
+		Ip:   parsedIp,
+		Port: uint16(*connectionPort),
+	}
 	initialTimestamp := time.Now().UnixMilli()
 	var env message.MessageEnvelope
 	var b []byte
@@ -46,8 +50,9 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		logging.LogErrorWithExit("could not marshal initial message envelope for joining a new network - %s", err)
 	}
 
-	connectionPair := net.JoinHostPort(*connectionIp, fmt.Sprintf("%d", *connectionPort))
-	if err = currNode.SendMessageToIp(b, parsedIp, uint16(*connectionPort)); err != nil {
+	connectionPair := connectionIpPortPair.NetString()
+
+	if err = network.SendToDest(b, connectionIpPortPair, time.Duration(currNode.DeathTimer)); err != nil {
 		logging.LogErrorWithExit("could not sent message envelope to node %s", connectionPair)
 	}
 	logging.LogInfo("sent message to %s: type=%s data=%s", connectionPair, env.Type, env.Data)
@@ -66,7 +71,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 	running := true
 
 	type ResponiveNode struct {
-		pair        message.IpPortPair
+		pair        network.IpPortPair
 		rttDuration int64
 	}
 
@@ -112,7 +117,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			}
 
 			responsiveNodes = append(responsiveNodes, ResponiveNode{
-				pair: message.IpPortPair{
+				pair: network.IpPortPair{
 					Ip:   msg.NewNode.Ip,
 					Port: msg.NewNode.Port,
 				},
@@ -146,7 +151,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		return int(a.rttDuration - b.rttDuration)
 	})
 
-	var bestNode message.IpPortPair
+	var bestNode network.IpPortPair
 	var gotConnChan chan struct{} = make(chan struct{}, 1)
 
 	running = true
@@ -155,7 +160,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		// Thus if we iterate over the slice, we should get the best candidates.
 		reNo := responsiveNodes[i]
 
-		if err = currNode.SendMessageToIp(confirmEnvBytes, reNo.pair.Ip, reNo.pair.Port); err != nil {
+		if err = network.SendToDest(confirmEnvBytes, reNo.pair, time.Duration(currNode.DeathTimer)); err != nil {
 			logging.LogErrorWithExit("could not send net join message - %s", err)
 		}
 		logging.LogInfo("sent message to responsive node %s: type=%s data=%s", reNo.pair, confirmEnv.Type, confirmEnv.Data)
@@ -243,13 +248,13 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		message.NetNewNodeJoin,
 		&message.NetNewNodeJoinMessage{
 			AttachedNode: bestNode,
-			JoiningNode: message.IpPortPair{
+			JoiningNode: network.IpPortPair{
 				Ip:   net.ParseIP(*ip),
 				Port: uint16(*port),
 			},
-			ReplacedNode: message.NullIpPortPair,
+			ReplacedNode: network.NullIpPortPair,
 		},
-		message.IpPortPair{
+		network.IpPortPair{
 			Ip:   net.ParseIP(*ip),
 			Port: uint16(*port),
 		},
@@ -260,7 +265,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			logging.LogErrorWithExit("could not serialize the join message envelope: %s", err)
 		}
 
-		if err = currNode.SendMessageToIp(b, bestNode.Ip, bestNode.Port); err != nil {
+		if err = network.SendToDest(b, bestNode, time.Duration(currNode.DeathTimer)); err != nil {
 			logging.LogErrorWithExit("could not send join message: %s", err)
 		}
 	}
