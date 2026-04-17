@@ -3,3 +3,4 @@ TODO:
     - RPC
     - Repositioning procedure, where a node may request to reposition itself and leave an empty shell in its place so that we do not break the network
     - Update protocol (global + direct one-on-one)
+    - Dead hopping
