@@ -26,14 +26,24 @@ type Node struct {
 	LifeLineTicker *time.Ticker                                `json:"-"`
 	DeathTimer     uint8                                       `json:"-"`
 	LastTimeAlive  int64                                       `json:"-"`
+	DepthVision    uint8                                       `json:"-"`
 	Stat           Stats                                       `json:"-"`
 }
+
+type NodeIPPMap = map[string][]network.IpPortPair
 
 func (n *Node) String() string {
 	return fmt.Sprintf("[ip=%s, port=%d, conns=%v]", n.Ip, n.Port, n.Conns)
 }
 
-func Create(ip string, port uint16, connCap uint16, queueCap uint16) (*Node, error) {
+func CreatePrimaryConnectionNode(ipp network.IpPortPair) *Node {
+	return &Node{
+		Ip:   ipp.Ip,
+		Port: ipp.Port,
+	}
+}
+
+func Create(ip string, port uint16, connCap uint8, queueCap uint16) (*Node, error) {
 	parsedIp := net.ParseIP(ip)
 	if parsedIp == nil {
 		return nil, fmt.Errorf("cannot create node due to invalid IP: %s", ip)
@@ -47,6 +57,59 @@ func Create(ip string, port uint16, connCap uint16, queueCap uint16) (*Node, err
 		Alive:         true,
 		LifeLineTimer: 0,
 	}, nil
+}
+
+func createIpPortPairMapForNode(n *Node, layers uint8, cont NodeIPPMap, skipNode *network.IpPortPair) {
+	if layers == 0 {
+		return
+	}
+
+	if len(n.Conns) == 0 {
+		return
+	}
+	ipportPairs := make([]network.IpPortPair, 0, len(n.Conns))
+
+	for i := range n.Conns {
+		connIpp := n.Conns[i].GetIpPortPair()
+		if skipNode != nil && network.CompareIpPortPair(*skipNode, connIpp) {
+			continue
+		}
+		logging.LogDebug("gathering node for update info: %s", connIpp)
+		ipportPairs = append(ipportPairs, connIpp)
+		createIpPortPairMapForNode(n.Conns[i], layers-1, cont, skipNode)
+	}
+
+	cont[n.GetIpPortPair().Hash()] = ipportPairs
+}
+
+func putIpPortPairsAsNodesInNode(n *Node, layers uint8, cont NodeIPPMap, skipNodes ...network.IpPortPair) {
+	if layers == 0 {
+		return
+	}
+	nodeHash := n.GetIpPortPair().Hash()
+
+	var nodesIpp []network.IpPortPair
+	var ok bool
+	// If we cannot find the nodes hash, it means it either does not have any connections, or the vision of the sender is limited
+	if nodesIpp, ok = cont[nodeHash]; !ok {
+		return
+	}
+
+	nodeConnCap := cap(n.Conns)
+
+	// We reset the connections list, and add them once again
+	n.Conns = make([]*Node, 0, nodeConnCap)
+
+	for i := range nodesIpp {
+		if slices.ContainsFunc(skipNodes, func(ipp network.IpPortPair) bool {
+			return network.CompareIpPortPair(nodesIpp[i], ipp)
+		}) {
+			continue
+		}
+		conn := CreatePrimaryConnectionNode(nodesIpp[i])
+		n.Conns = append(n.Conns, conn)
+		putIpPortPairsAsNodesInNode(conn, layers-1, cont, skipNodes...)
+	}
 }
 
 // listen function returns a net.Listener to handle incoming connections.
@@ -105,6 +168,14 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
 		n.processNetNewNodeJoinConfirmMessage(msgEnv.Sender)
+		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
+		return nil
+	case message.NetUpdate:
+		msg := message.NetUpdateMessage{}
+		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
+			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
+		}
+		n.processNetUpdateMessage(msg, msgEnv.Sender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	default:
@@ -293,7 +364,7 @@ func (n *Node) GetNodeAddress() string {
 func (n *Node) gatherNodesToSendTo() []network.IpPortPair {
 	toRet := make([]network.IpPortPair, 0)
 	for i := range n.Conns {
-		// Here we should create the logic for dead hopping
+		// TODO Here we should create the logic for dead hopping
 		if n.Conns[i].Alive {
 			toRet = append(toRet, n.Conns[i].GetIpPortPair())
 			continue
@@ -318,7 +389,11 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...ne
 	network.SendToMultipleDest(b, destNodes, skipSenderList, time.Duration(n.DeathTimer))
 }
 
-func findNodeByIpPortPairInNode(node *Node, ipp network.IpPortPair) *Node {
+func findNodeByIpPortPairInNode(node *Node, ipp network.IpPortPair, layer uint8) *Node {
+	if layer == 0 {
+		return nil
+	}
+
 	if network.CompareIpPortPair(node.GetIpPortPair(), ipp) {
 		return node
 	}
@@ -330,7 +405,7 @@ func findNodeByIpPortPairInNode(node *Node, ipp network.IpPortPair) *Node {
 			return conn
 		}
 
-		if toRet := findNodeByIpPortPairInNode(conn, ipp); toRet != nil {
+		if toRet := findNodeByIpPortPairInNode(conn, ipp, layer-1); toRet != nil {
 			return toRet
 		}
 	}
@@ -349,7 +424,6 @@ func (n *Node) replaceFirstDeadNode(newNode *Node) *Node {
 		logging.LogDebug("node %v is alive? %v", nod.GetIpPortPair(), nod.Alive)
 		return !nod.Alive
 	}); idx != -1 {
-		// TODO: Maybe a bug here? Returning a pointer to a reassigned location?
 		oldNode := n.Conns[idx]
 		n.Conns[idx] = newNode
 		return oldNode

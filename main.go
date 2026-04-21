@@ -252,7 +252,9 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 				Ip:   net.ParseIP(*ip),
 				Port: uint16(*port),
 			},
-			ReplacedNode: network.NullIpPortPair,
+			ReplacedNode:       network.NullIpPortPair,
+			JoiningNodeView:    currNode.DepthVision,
+			JoiningNodeConnCap: uint8(cap(currNode.Conns)),
 		},
 		network.IpPortPair{
 			Ip:   net.ParseIP(*ip),
@@ -281,6 +283,7 @@ func main() {
 	queueCap := flag.Uint("queuecap", defaultUninitInt, "the maximum capacity of the message queue")
 	lifelineTimer := flag.Uint("lifeline", defaultUninitInt, "the duration in seconds between lifeline messages")
 	deathannounceTimer := flag.Uint("death", defaultUninitInt, "the duration in seconds between last lifeline message until we announce its death")
+	depthVision := flag.Uint("depth", defaultUninitInt, "the vision depth of each node")
 	flag.BoolVar(&logging.DebugFlag, "debug", false, "turn on debug logging")
 
 	flag.Parse()
@@ -303,8 +306,11 @@ func main() {
 	if *deathannounceTimer == defaultUninitInt {
 		logging.LogErrorWithExit("death duration is 0 - must be greater than 0")
 	}
+	if *depthVision == defaultUninitInt {
+		logging.LogErrorWithExit("depth vision is 0 - must be greater than 0")
+	}
 
-	currNode, err := node.Create(*ip, uint16(*port), uint16(*connsCap), uint16(*queueCap))
+	currNode, err := node.Create(*ip, uint16(*port), uint8(*connsCap), uint16(*queueCap))
 	if err != nil {
 		logging.LogErrorWithExit("%s", err)
 	}
@@ -313,6 +319,9 @@ func main() {
 
 	currNode.DeathTimer = uint8(*deathannounceTimer)
 	logging.LogDebug("setting death timer duration to: %d", currNode.DeathTimer)
+
+	currNode.DepthVision = uint8(*depthVision)
+	logging.LogDebug("setting depth vision to: %d", currNode.DepthVision)
 
 	if *newNet {
 		JoinNewNetwork(currNode, connectionIp, connectionPort, port, ip, connsCap)

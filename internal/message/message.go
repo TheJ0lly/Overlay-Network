@@ -15,6 +15,7 @@ const (
 	NetNewNodeJoinQuery
 	NetLifeLine
 	NetDeathAnnouncement
+	NetUpdate
 )
 
 func (mt MessageType) String() string {
@@ -29,6 +30,8 @@ func (mt MessageType) String() string {
 		return "NetLifeLine"
 	case NetDeathAnnouncement:
 		return "NetDeathAnnouncement"
+	case NetUpdate:
+		return "NetUpdate"
 	default:
 		return "unknown"
 	}
@@ -81,9 +84,11 @@ func SerializeNewMessageEnvelope(mt MessageType, msg SerializableMessage, sender
 
 // NetNewNodeJoinMessage is the message a node receives when a new node has queried and find a place to attach.
 type NetNewNodeJoinMessage struct {
-	JoiningNode  network.IpPortPair `json:"JoiningNode"`
-	AttachedNode network.IpPortPair `json:"AttachedNode"`
-	ReplacedNode network.IpPortPair `json:"ReplacedNode"`
+	JoiningNode        network.IpPortPair `json:"JoiningNode"`
+	AttachedNode       network.IpPortPair `json:"AttachedNode"`
+	ReplacedNode       network.IpPortPair `json:"ReplacedNode"`
+	JoiningNodeView    uint8              `json:"JoiningNodeView"`
+	JoiningNodeConnCap uint8              `json:"JoiningNodeConnCap"`
 }
 
 func (msg *NetNewNodeJoinMessage) Serialize() ([]byte, error) {
@@ -110,15 +115,11 @@ func (msg *NetNewNodeJoinQueryMessage) Serialize() ([]byte, error) {
 	return json.Marshal(msg)
 }
 
-// TODO Add a field where it writes the IpPortPair which is supposed to be alive, because it's causing a lot of issues with the LIFELINE.
-// The sender of the envelope should change each time, but the alive node should remain the same.
+// NetLifeLineMessage is a message that will be sent periodically to let the other nodes that this node is alive.
 type NetLifeLineMessage struct {
 	Node network.IpPortPair `json:"Node"`
 }
 
-// NetLifeLineMessage is a message that will be sent periodically to let the other nodes that this node is alive.
-// The only data needed, as of now, for this type of message is the message type and the sender, so that we can link with the Death Certificate.
-// We can return (nil, nil) for now as we do not require any data in the actual message.
 func (msg *NetLifeLineMessage) Serialize() ([]byte, error) {
 	return json.Marshal(msg)
 }
@@ -128,5 +129,14 @@ type NetDeathAnnouncementMessage struct {
 }
 
 func (msg *NetDeathAnnouncementMessage) Serialize() ([]byte, error) {
+	return json.Marshal(msg)
+}
+
+type NetUpdateMessage struct {
+	UpdatedNode network.IpPortPair              `json:"UpdatedNode"`
+	Conns       map[string][]network.IpPortPair `json:"Conns"`
+}
+
+func (msg *NetUpdateMessage) Serialize() ([]byte, error) {
 	return json.Marshal(msg)
 }

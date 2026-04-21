@@ -1,6 +1,7 @@
 package network
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,6 +14,13 @@ import (
 type IpPortPair struct {
 	Ip   net.IP
 	Port uint16
+}
+
+func (ipp IpPortPair) Hash() string {
+	buffer := make([]byte, len(ipp.Ip)+2)
+	copy(buffer, ipp.Ip)
+	buffer = append(buffer, byte(ipp.Port>>8), byte(ipp.Port&0xff))
+	return fmt.Sprintf("%X", sha256.Sum256(buffer))
 }
 
 var NullIpPortPair = IpPortPair{

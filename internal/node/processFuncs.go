@@ -13,21 +13,39 @@ import (
 func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender network.IpPortPair) {
 	// Here it is okay to create the node with queue and conn capacity 0, because this is a mock node.
 	// It's queue won't be used. Maybe make another method? TODO
-	newNode, err := Create(msg.JoiningNode.Ip.String(), msg.JoiningNode.Port, 0, 0)
+	newNode, err := Create(msg.JoiningNode.Ip.String(), msg.JoiningNode.Port, msg.JoiningNodeConnCap, 0)
 	if err != nil {
 		logging.LogError("failed to create new node object: %s", err)
 		return
 	}
+	newNode.DepthVision = msg.JoiningNodeView
+	logging.LogDebug("new node has depth: %d", newNode.DepthVision)
 
 	var skipNodes []network.IpPortPair = []network.IpPortPair{sender}
 
 	// It means we are the node that is being attached to, we need to skip the sender node
 	// As they append us themselves.
 	var attachedNode *Node
-	if attachedNode = findNodeByIpPortPairInNode(n, msg.AttachedNode); attachedNode == nil {
-		logging.LogInfo("couldn't find attached node %s in visible nodes - skipping forwarding", msg.AttachedNode.NetString())
+	if attachedNode = findNodeByIpPortPairInNode(n, msg.AttachedNode, n.DepthVision); attachedNode == nil {
+		logging.LogInfo("couldn't find attached node %s in visible nodes", msg.AttachedNode.NetString())
+		env, err := message.CreateMessageEnvelope(
+			message.NetNewNodeJoin,
+			msg,
+			n.GetIpPortPair(),
+		)
+		if err != nil {
+			logging.LogError("failed to serialize response to net join message - %s", err)
+			return
+		}
+
+		go n.ForwardMessage(
+			&env,
+			skipNodes...,
+		)
 		return
 	}
+
+	var updatedNodeConns NodeIPPMap = make(NodeIPPMap)
 
 	if network.CompareIpPortPair(attachedNode.GetIpPortPair(), n.GetIpPortPair()) {
 		logging.LogDebug("we are the node that is being attached to")
@@ -50,10 +68,17 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 			n.Conns = append(n.Conns, newNode)
 			msg.ReplacedNode = network.NullIpPortPair
 		}
+		// The manual addition of THIS node as a primary connection
+		newNodeKnownConns := make([]network.IpPortPair, 0, 1)
+		newNodeKnownConns = append(newNodeKnownConns, n.GetIpPortPair())
+		updatedNodeConns[newNode.GetIpPortPair().Hash()] = newNodeKnownConns
+		nIpp := n.GetIpPortPair()
+		createIpPortPairMapForNode(n, newNode.DepthVision-1, updatedNodeConns, &nIpp)
+		logging.LogDebug("creating update info for new node: %s", newNode)
 	} else {
 		// If there is a replced node, it means we must find the node and replace its data
 		if !network.CompareIpPortPair(network.NullIpPortPair, msg.ReplacedNode) {
-			if replacedNode := findNodeByIpPortPairInNode(attachedNode, msg.ReplacedNode); replacedNode != nil {
+			if replacedNode := findNodeByIpPortPairInNode(attachedNode, msg.ReplacedNode, attachedNode.DepthVision); replacedNode != nil {
 				*replacedNode = *newNode
 			}
 		} else {
@@ -77,6 +102,30 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		&env,
 		skipNodes...,
 	)
+
+	// If we do not have have a direct interaction with the new node, we won't be having to forward anything.
+	if len(updatedNodeConns) == 0 {
+		return
+	}
+
+	timeToWait := 100
+
+	// Artificial timer so that we do not risk sending an update for an inexistent node
+	logging.LogDebug("waiting for %d ms to send the update for the new node", timeToWait)
+	time.Sleep(time.Duration(timeToWait) * time.Millisecond)
+
+	updateMsg := message.NetUpdateMessage{
+		UpdatedNode: newNode.GetIpPortPair(),
+		Conns:       updatedNodeConns,
+	}
+
+	env, err = message.CreateMessageEnvelope(message.NetUpdate, &updateMsg, n.GetIpPortPair())
+	if err != nil {
+		logging.LogError("failed to create update message for new node - %s", err)
+		return
+	}
+
+	go n.ForwardMessage(&env)
 }
 
 func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender network.IpPortPair) {
@@ -121,7 +170,7 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 
 func (n *Node) processNetLifeLineMessage(msg message.NetLifeLineMessage, sender network.IpPortPair) {
 	var nd *Node
-	if nd = findNodeByIpPortPairInNode(n, msg.Node); nd == nil {
+	if nd = findNodeByIpPortPairInNode(n, msg.Node, n.DepthVision); nd == nil {
 		logging.LogDebug("could not find node: %s", msg.Node.NetString())
 	} else {
 		nd.Alive = true
@@ -140,7 +189,7 @@ func (n *Node) processNetLifeLineMessage(msg message.NetLifeLineMessage, sender 
 func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncementMessage, sender network.IpPortPair) {
 	for i := range msg.DeadNodes {
 		deadNode := msg.DeadNodes[i]
-		if node := findNodeByIpPortPairInNode(n, deadNode); node != nil {
+		if node := findNodeByIpPortPairInNode(n, deadNode, n.DepthVision); node != nil {
 			node.Alive = false
 			continue
 		}
@@ -184,4 +233,25 @@ func (n *Node) processNetNewNodeJoinConfirmMessage(sender network.IpPortPair) {
 	}
 	n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, sender)
 	logging.LogDebug("sent confirm message with isSuitable=%v", confirmMessageData.IsSuitable)
+}
+
+func (n *Node) processNetUpdateMessage(msg message.NetUpdateMessage, sender network.IpPortPair) {
+	updatedNode := findNodeByIpPortPairInNode(n, msg.UpdatedNode, n.DepthVision)
+	if updatedNode == nil {
+		logging.LogInfo("could not find the updated node")
+	} else {
+		logging.LogInfo("found the updated node: %v", updatedNode)
+		logging.LogInfo("targeted node state before: %s", updatedNode)
+		nodeIpp := n.GetIpPortPair()
+		putIpPortPairsAsNodesInNode(updatedNode, updatedNode.DepthVision, msg.Conns, nodeIpp)
+		logging.LogInfo("targeted node state after: %s", updatedNode)
+	}
+
+	env, err := message.CreateMessageEnvelope(message.NetUpdate, &msg, n.GetIpPortPair())
+	if err != nil {
+		logging.LogError("could not create update envelope: %s", err)
+		return
+	}
+
+	go n.ForwardMessage(&env, sender)
 }
