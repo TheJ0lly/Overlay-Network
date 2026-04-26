@@ -38,8 +38,9 @@ func (n *Node) String() string {
 
 func CreatePrimaryConnectionNode(ipp network.IpPortPair) *Node {
 	return &Node{
-		Ip:   ipp.Ip,
-		Port: ipp.Port,
+		Ip:    ipp.Ip,
+		Port:  ipp.Port,
+		Alive: true,
 	}
 }
 
@@ -361,16 +362,23 @@ func (n *Node) GetNodeAddress() string {
 	return ipp.NetString()
 }
 
-func (n *Node) gatherNodesToSendTo() []network.IpPortPair {
-	toRet := make([]network.IpPortPair, 0)
+func gatherNodesToSendTo(n *Node, dests []network.IpPortPair, layer uint8) []network.IpPortPair {
+	if layer == 0 {
+		return dests
+	}
+
 	for i := range n.Conns {
-		// TODO Here we should create the logic for dead hopping
-		if n.Conns[i].Alive {
-			toRet = append(toRet, n.Conns[i].GetIpPortPair())
-			continue
+		conn := n.Conns[i]
+
+		if conn.Alive {
+			dests = append(dests, conn.GetIpPortPair())
+		} else {
+			logging.LogDebug("node %v is marked as dead, gathering its nodes", conn.GetIpPortPair())
+			dests = gatherNodesToSendTo(conn, dests, layer-1)
 		}
 	}
-	return toRet
+
+	return dests
 }
 
 func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...network.IpPortPair) {
@@ -385,7 +393,8 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...ne
 		return
 	}
 
-	destNodes := n.gatherNodesToSendTo()
+	destNodes := make([]network.IpPortPair, 0)
+	destNodes = gatherNodesToSendTo(n, destNodes, n.DepthVision)
 	network.SendToMultipleDest(b, destNodes, skipSenderList, time.Duration(n.DeathTimer))
 }
 

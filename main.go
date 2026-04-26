@@ -306,8 +306,8 @@ func main() {
 	if *deathannounceTimer == defaultUninitInt {
 		logging.LogErrorWithExit("death duration is 0 - must be greater than 0")
 	}
-	if *depthVision == defaultUninitInt {
-		logging.LogErrorWithExit("depth vision is 0 - must be greater than 0")
+	if *depthVision == defaultUninitInt || *depthVision < 2 {
+		logging.LogErrorWithExit("depth vision must be greater than 2")
 	}
 
 	currNode, err := node.Create(*ip, uint16(*port), uint8(*connsCap), uint16(*queueCap))

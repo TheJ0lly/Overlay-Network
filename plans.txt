@@ -1,6 +1,6 @@
 TODO:
-    - File query + transfer from multiple points
-    - RPC
-    - Repositioning procedure, where a node may request to reposition itself and leave an empty shell in its place so that we do not break the network
-    - Update protocol (global + direct one-on-one)
-    - Dead hopping
+    - File query + transfer from multiple points - TBD
+    - RPC - TBD
+    - Repositioning procedure, where a node may request to reposition itself and leave an empty shell in its place so that we do not break the network - TBD
+    - Update protocol (global + direct one-on-one) - DONE
+    - Dead hopping - DONE

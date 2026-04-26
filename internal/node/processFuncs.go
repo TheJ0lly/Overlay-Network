@@ -11,8 +11,6 @@ import (
 )
 
 func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender network.IpPortPair) {
-	// Here it is okay to create the node with queue and conn capacity 0, because this is a mock node.
-	// It's queue won't be used. Maybe make another method? TODO
 	newNode, err := Create(msg.JoiningNode.Ip.String(), msg.JoiningNode.Port, msg.JoiningNodeConnCap, 0)
 	if err != nil {
 		logging.LogError("failed to create new node object: %s", err)
