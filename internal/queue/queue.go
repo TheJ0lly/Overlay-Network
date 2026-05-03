@@ -50,6 +50,15 @@ func (mq *MessageQueue[T]) Append(item T) error {
 	return nil
 }
 
+func (mq *MessageQueue[T]) Insert(item T, idx int) error {
+	if len(mq.q) >= cap(mq.q) {
+		return fmt.Errorf("queue is full (%d)! new message will be discarded", cap(mq.q))
+	}
+
+	mq.q = slices.Insert(mq.q, idx, item)
+	return nil
+}
+
 // FindAllByFunc returns a slice of copies of the objects inside the actual queue. The `find` function condition must return `true` for the item to be found.
 func (mq *MessageQueue[T]) FindAllByFunc(find func(T) bool) []T {
 	var sToRet []T

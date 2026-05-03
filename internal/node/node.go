@@ -96,20 +96,37 @@ func putIpPortPairsAsNodesInNode(n *Node, layers uint8, cont NodeIPPMap, skipNod
 		return
 	}
 
-	nodeConnCap := cap(n.Conns)
-
+	// nodeConnCap := cap(n.Conns)
 	// We reset the connections list, and add them once again
-	n.Conns = make([]*Node, 0, nodeConnCap)
+	// n.Conns = make([]*Node, 0, nodeConnCap)
 
 	for i := range nodesIpp {
 		if slices.ContainsFunc(skipNodes, func(ipp network.IpPortPair) bool {
-			return network.CompareIpPortPair(nodesIpp[i], ipp)
+			val := network.CompareIpPortPair(nodesIpp[i], ipp)
+			logging.LogDebug("MATEI skip node %s == %s? %v", ipp, nodesIpp[i], val)
+			return val
 		}) {
 			continue
 		}
-		conn := CreatePrimaryConnectionNode(nodesIpp[i])
-		n.Conns = append(n.Conns, conn)
-		putIpPortPairsAsNodesInNode(conn, layers-1, cont, skipNodes...)
+
+		var conn *Node
+		if idx := slices.IndexFunc(n.Conns, func(no *Node) bool {
+			logging.LogDebug("MATEI pConn node %s == %s? %v", nodesIpp[i], no.GetIpPortPair(), network.CompareIpPortPair(nodesIpp[i], no.GetIpPortPair()))
+			return network.CompareIpPortPair(nodesIpp[i], no.GetIpPortPair())
+		}); idx != -1 {
+			conn = n.Conns[idx]
+			logging.LogDebug("MATEI existing node found in update: %v", conn)
+		} else {
+			conn = CreatePrimaryConnectionNode(nodesIpp[i])
+			logging.LogDebug("MATEI creating node from update: %v", conn)
+			n.Conns = append(n.Conns, conn)
+		}
+		skipN := make([]network.IpPortPair, 0, len(skipNodes)+2)
+		skipN = append(skipN, skipNodes...)
+		skipN = append(skipN, n.GetIpPortPair())
+		skipN = append(skipN, conn.GetIpPortPair())
+		logging.LogDebug("new skipping list under %v: \n %v", conn, skipN)
+		putIpPortPairsAsNodesInNode(conn, layers-1, cont, skipN...)
 	}
 }
 
@@ -362,7 +379,7 @@ func (n *Node) GetNodeAddress() string {
 	return ipp.NetString()
 }
 
-func gatherNodesToSendTo(n *Node, dests []network.IpPortPair, layer uint8) []network.IpPortPair {
+func gatherNodesToSendTo(n *Node, dests []network.IpPortPair, layer uint8, skipNodes ...network.IpPortPair) []network.IpPortPair {
 	if layer == 0 {
 		return dests
 	}
@@ -370,10 +387,12 @@ func gatherNodesToSendTo(n *Node, dests []network.IpPortPair, layer uint8) []net
 	for i := range n.Conns {
 		conn := n.Conns[i]
 
-		if conn.Alive {
+		if conn.Alive && !slices.ContainsFunc(skipNodes, func(no network.IpPortPair) bool {
+			return network.CompareIpPortPair(no, conn.GetIpPortPair())
+		}) {
 			dests = append(dests, conn.GetIpPortPair())
 		} else {
-			logging.LogDebug("node %v is marked as dead, gathering its nodes", conn.GetIpPortPair())
+			logging.LogDebug("node %v is marked as dead or to be skipped, gathering its nodes", conn.GetIpPortPair())
 			dests = gatherNodesToSendTo(conn, dests, layer-1)
 		}
 	}
@@ -395,6 +414,7 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...ne
 
 	destNodes := make([]network.IpPortPair, 0)
 	destNodes = gatherNodesToSendTo(n, destNodes, n.DepthVision)
+	logging.LogDebug("nodes to send message %v to %v", env.Type, destNodes)
 	network.SendToMultipleDest(b, destNodes, skipSenderList, time.Duration(n.DeathTimer))
 }
 
@@ -428,14 +448,18 @@ func (n *Node) GetIpPortPair() network.IpPortPair {
 	}
 }
 
-func (n *Node) replaceFirstDeadNode(newNode *Node) *Node {
+func (n *Node) replaceFirstDeadNode(newNode *Node) *network.IpPortPair {
 	if idx := slices.IndexFunc(n.Conns, func(nod *Node) bool {
 		logging.LogDebug("node %v is alive? %v", nod.GetIpPortPair(), nod.Alive)
 		return !nod.Alive
 	}); idx != -1 {
-		oldNode := n.Conns[idx]
-		n.Conns[idx] = newNode
-		return oldNode
+		oldNode := n.Conns[idx].GetIpPortPair()
+		n.Conns[idx].Ip = newNode.Ip
+		n.Conns[idx].Port = newNode.Port
+		con := make([]*Node, 0, cap(newNode.Conns))
+		con = append(con, n.Conns...)
+		n.Conns = con
+		return &oldNode
 	}
 	return nil
 }

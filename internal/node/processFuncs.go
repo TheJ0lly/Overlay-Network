@@ -58,8 +58,8 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		if len(n.Conns) == cap(n.Conns) {
 			if replacedNode := n.replaceFirstDeadNode(newNode); replacedNode != nil {
 				// Here we should forward an update message to update the connections of the new node
-				logging.LogDebug("replacing dead node %v with node %v", replacedNode.GetIpPortPair(), newNode.GetIpPortPair())
-				msg.ReplacedNode = replacedNode.GetIpPortPair()
+				logging.LogDebug("replacing dead node %v with node %v", replacedNode, newNode.GetIpPortPair())
+				msg.ReplacedNode = *replacedNode
 			}
 		} else {
 			logging.LogDebug("added new node - %s", newNode)
@@ -72,12 +72,25 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		updatedNodeConns[newNode.GetIpPortPair().Hash()] = newNodeKnownConns
 		nIpp := n.GetIpPortPair()
 		createIpPortPairMapForNode(n, newNode.DepthVision-1, updatedNodeConns, &nIpp)
-		logging.LogDebug("creating update info for new node: %s", newNode)
+		logging.LogDebug("creating update info for new node %s", newNode)
+		// TODO: this is a temporary method. It is needed when we have a new node joining.
+		// If we make the new node alive, then this node will send the NetNewNodeJoinMessage to the new node.
+		// In case the new node is a replacement, it means the NetNewNodeJoinMessage will not reach the other nodes.
+		// Here we add the new node to the skip list, must see what better way to do this
+		// MUST FIX AFTER REFACTORIZATION.
+		skipNodes = append(skipNodes, newNode.GetIpPortPair())
 	} else {
 		// If there is a replced node, it means we must find the node and replace its data
 		if !network.CompareIpPortPair(network.NullIpPortPair, msg.ReplacedNode) {
-			if replacedNode := findNodeByIpPortPairInNode(attachedNode, msg.ReplacedNode, attachedNode.DepthVision); replacedNode != nil {
-				*replacedNode = *newNode
+			logging.LogDebug("MATEI we have a replaced node in the message")
+			if replacedNode := findNodeByIpPortPairInNode(n, msg.ReplacedNode, attachedNode.DepthVision); replacedNode != nil {
+				logging.LogDebug("MATEI replacing dead node %v with node %v", replacedNode.GetIpPortPair(), newNode.GetIpPortPair())
+				replacedNode.Ip = newNode.Ip
+				replacedNode.Port = newNode.Port
+				con := make([]*Node, 0, cap(newNode.Conns))
+				con = append(con, replacedNode.Conns...)
+				replacedNode.Conns = con
+				logging.LogDebug("MATEI new node: %s", replacedNode)
 			}
 		} else {
 			attachedNode.Conns = append(attachedNode.Conns, newNode)
@@ -123,7 +136,8 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		return
 	}
 
-	go n.ForwardMessage(&env)
+	n.Queue.Insert(env, 0)
+	n.Queue.Notify()
 }
 
 func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender network.IpPortPair) {
@@ -241,7 +255,7 @@ func (n *Node) processNetUpdateMessage(msg message.NetUpdateMessage, sender netw
 		logging.LogInfo("found the updated node: %v", updatedNode)
 		logging.LogInfo("targeted node state before: %s", updatedNode)
 		nodeIpp := n.GetIpPortPair()
-		putIpPortPairsAsNodesInNode(updatedNode, updatedNode.DepthVision, msg.Conns, nodeIpp)
+		putIpPortPairsAsNodesInNode(n, updatedNode.DepthVision, msg.Conns, nodeIpp, updatedNode.GetIpPortPair())
 		logging.LogInfo("targeted node state after: %s", updatedNode)
 	}
 
