@@ -243,6 +243,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 				bestNode.Port = reNo.pair.Port
 				logging.LogDebug("added new node - %s", newNode)
 				logging.LogDebug("attached node state - %s", currNode)
+				currNode.Stat.PrimaryConnections++
 				list.Close()
 				conn.Close()
 				// Here we break out of the loop since we found a good node and it confirmed the attachment.

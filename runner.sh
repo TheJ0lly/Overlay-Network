@@ -90,3 +90,5 @@ echo "Started $N nodes"
 sleep 60
 
 pkill -9 -f overlay
+
+echo "Done testing"
