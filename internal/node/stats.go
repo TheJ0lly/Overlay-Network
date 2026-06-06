@@ -10,10 +10,10 @@ import (
 )
 
 type Stats struct {
-	JoinQueriesOngoing []network.IpPortPair
-	MessagesReceived   map[string]uint64 `json:"MessagesReceived"`
-	MessagesForwarded  map[string]uint64 `json:"MessagesForwarded"`
-	SendErrors         uint64            `json:"SendErrors"`
+	JoinQueriesOngoing []network.IpPortPair `json:"-"`
+	MessagesReceived   map[string]uint64    `json:"MessagesReceived"`
+	MessagesForwarded  map[string]uint64    `json:"MessagesForwarded"`
+	SendErrors         uint64               `json:"SendErrors"`
 
 	JoinCandidateResponses uint64 `json:"JoinCandidateResponses"`
 	JoinCandidateRejects   uint64 `json:"JoinCandidateRejects"`
