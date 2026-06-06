@@ -68,6 +68,7 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 			logging.LogDebug("added new node - %s", newNode)
 			n.Conns = append(n.Conns, newNode)
 			msg.ReplacedNode = network.NullIpPortPair
+			n.Stat.PrimaryConnections++
 		}
 		// The manual addition of THIS node as a primary connection
 		newNodeKnownConns := make([]network.IpPortPair, 0, 1)

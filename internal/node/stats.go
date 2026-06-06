@@ -30,6 +30,7 @@ type Stats struct {
 	NodesReplaced      uint64 `json:"NodesReplaced"`
 	NewNodeRejects     uint64 `json:"NewNodeRejects"`
 	DuplicatedMessages uint64 `json:"DuplicatedMessages"`
+	PrimaryConnections uint64 `json:"PrimaryConnections"`
 }
 
 func NewStats() Stats {

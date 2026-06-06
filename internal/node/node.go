@@ -273,6 +273,7 @@ func (n *Node) setNodesDead(deadNodes []network.IpPortPair) {
 		}) && n.Conns[i].Alive == true {
 			logging.LogDebug("new node has been marked as dead: %v - %v", n.Conns[i].Ip, n.Conns[i].Port)
 			n.Conns[i].Alive = false
+			n.Stat.PrimaryConnections--
 		}
 	}
 }
