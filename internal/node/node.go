@@ -57,6 +57,7 @@ func Create(ip string, port uint16, connCap uint8, queueCap uint16) (*Node, erro
 		Queue:         queue.Create[message.MessageEnvelope](queueCap),
 		Alive:         true,
 		LifeLineTimer: 0,
+		Stat:          NewStats(),
 	}, nil
 }
 
@@ -103,7 +104,6 @@ func putIpPortPairsAsNodesInNode(n *Node, layers uint8, cont NodeIPPMap, skipNod
 	for i := range nodesIpp {
 		if slices.ContainsFunc(skipNodes, func(ipp network.IpPortPair) bool {
 			val := network.CompareIpPortPair(nodesIpp[i], ipp)
-			logging.LogDebug("MATEI skip node %s == %s? %v", ipp, nodesIpp[i], val)
 			return val
 		}) {
 			continue
@@ -111,14 +111,11 @@ func putIpPortPairsAsNodesInNode(n *Node, layers uint8, cont NodeIPPMap, skipNod
 
 		var conn *Node
 		if idx := slices.IndexFunc(n.Conns, func(no *Node) bool {
-			logging.LogDebug("MATEI pConn node %s == %s? %v", nodesIpp[i], no.GetIpPortPair(), network.CompareIpPortPair(nodesIpp[i], no.GetIpPortPair()))
 			return network.CompareIpPortPair(nodesIpp[i], no.GetIpPortPair())
 		}); idx != -1 {
 			conn = n.Conns[idx]
-			logging.LogDebug("MATEI existing node found in update: %v", conn)
 		} else {
 			conn = CreatePrimaryConnectionNode(nodesIpp[i])
-			logging.LogDebug("MATEI creating node from update: %v", conn)
 			n.Conns = append(n.Conns, conn)
 		}
 		skipN := make([]network.IpPortPair, 0, len(skipNodes)+2)
@@ -153,7 +150,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.processNetNewNodeJoinMessage(&msg, msgEnv.Sender)
+		n.processNetNewNodeJoinMessage(&msg, msgEnv.Sender, msgEnv.OriginalSender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetNewNodeJoinQuery:
@@ -161,7 +158,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.processNetNewNodeQueryMessage(&msg, msgEnv.Sender)
+		n.processNetNewNodeQueryMessage(&msg, msgEnv.Sender, msgEnv.OriginalSender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetLifeLine:
@@ -169,7 +166,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.processNetLifeLineMessage(msg, msgEnv.Sender)
+		n.processNetLifeLineMessage(msg, msgEnv.Sender, msgEnv.OriginalSender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetDeathAnnouncement:
@@ -177,7 +174,8 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.processDeathAnnouncementMessage(&msg, msgEnv.Sender)
+		n.Stat.DeathAnnouncementsReceived++
+		n.processDeathAnnouncementMessage(&msg, msgEnv.Sender, msgEnv.OriginalSender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetNewNodeJoinConfirm:
@@ -185,7 +183,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.processNetNewNodeJoinConfirmMessage(msgEnv.Sender)
+		n.processNetNewNodeJoinConfirmMessage(msgEnv.Sender, msgEnv.OriginalSender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	case message.NetUpdate:
@@ -193,7 +191,7 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 		if err := json.Unmarshal(msgEnv.Data, &msg); err != nil {
 			return fmt.Errorf("unmarshaling error for %s: %s", msgEnv.Type, err)
 		}
-		n.processNetUpdateMessage(msg, msgEnv.Sender)
+		n.processNetUpdateMessage(msg, msgEnv.Sender, msgEnv.OriginalSender)
 		n.setLastAliveTimeForNode(msgEnv.Sender, time.Now().UnixMilli())
 		return nil
 	default:
@@ -205,9 +203,15 @@ func (n *Node) handleMessage(msgEnv *message.MessageEnvelope) error {
 func (n *Node) processMessageGoroutine() {
 	for {
 		n.Queue.Wait()
-		msg := n.Queue.PopFront()
+		msg, err := n.Queue.PopFront()
+		if err != nil {
+			continue
+		}
 
 		logging.LogInfo("started processing new message: type=%s data=%s sender=%v", msg.Type, msg.Data, msg.Sender)
+		if network.CompareIpPortPair(msg.OriginalSender, n.GetIpPortPair()) {
+			n.Stat.DuplicatedMessages++
+		}
 
 		if err := n.handleMessage(&msg); err != nil {
 			logging.LogError("%s", err)
@@ -280,6 +284,7 @@ func (n *Node) sendLifeLineAnnouncement() {
 		message.NetLifeLine,
 		&message.NetLifeLineMessage{Node: n.GetIpPortPair()},
 		n.GetIpPortPair(),
+		n.GetIpPortPair(),
 	)
 
 	if err != nil {
@@ -288,6 +293,7 @@ func (n *Node) sendLifeLineAnnouncement() {
 	}
 
 	logging.LogDebug("sending lifeline")
+	n.Stat.MessagesForwarded[env.Type.String()]++
 	go n.ForwardMessage(&env)
 }
 
@@ -296,14 +302,15 @@ func (n *Node) sendDeathAnnouncement(deadNodes []network.IpPortPair) {
 
 	env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, &message.NetDeathAnnouncementMessage{
 		DeadNodes: deadNodes,
-	}, n.GetIpPortPair())
+	}, n.GetIpPortPair(), n.GetIpPortPair())
 
 	if err != nil {
 		logging.LogError("could not create envelope for death announcement: %s", err)
 		return
 	}
-
+	n.Stat.DeathAnnouncementsSent++
 	logging.LogInfo("sending death announcement for: %v", deadNodes)
+	n.Stat.MessagesForwarded[env.Type.String()]++
 	go n.ForwardMessage(&env, deadNodes...)
 }
 
@@ -311,6 +318,7 @@ func (n *Node) sendDeathAnnouncement(deadNodes []network.IpPortPair) {
 func (n *Node) periodicalMessagesLoop() {
 	n.LifeLineTicker = time.NewTicker(time.Duration(n.LifeLineTimer) * time.Second)
 	deathTicker := time.NewTicker(time.Duration(n.DeathTimer) * time.Second)
+	statsTicker := time.NewTicker(10 * time.Second)
 
 	for {
 		select {
@@ -323,6 +331,9 @@ func (n *Node) periodicalMessagesLoop() {
 				n.sendDeathAnnouncement(deadNodes)
 			}
 			deathTicker.Reset(time.Duration(n.DeathTimer) * time.Second)
+		case <-statsTicker.C:
+			n.Stat.ExportJson(n.Port)
+			statsTicker.Reset(10 * time.Second)
 		}
 	}
 }
@@ -367,8 +378,10 @@ func (n *Node) MainLoop() error {
 		if err = n.Queue.Append(env); err != nil {
 			logging.LogInfo("message queue error: %s", err)
 			conn.Close()
+			n.Stat.QueueDrops++
 			continue
 		}
+		n.Stat.MessagesReceived[env.Type.String()]++
 		conn.Close()
 		n.Queue.Notify()
 	}
@@ -393,7 +406,11 @@ func gatherNodesToSendTo(n *Node, dests []network.IpPortPair, layer uint8, skipN
 			dests = append(dests, conn.GetIpPortPair())
 		} else {
 			logging.LogDebug("node %v is marked as dead or to be skipped, gathering its nodes", conn.GetIpPortPair())
+			n.Stat.DeadHopAttempts++
 			dests = gatherNodesToSendTo(conn, dests, layer-1)
+			n.Stat.DeadHopNodesGathered += uint64(len(dests))
+
+			n.Stat.DeadHopNodesGatheredAvg = float64(n.Stat.DeadHopAttempts) / float64(n.Stat.DeadHopNodesGathered)
 		}
 	}
 
@@ -415,7 +432,7 @@ func (n *Node) ForwardMessage(env *message.MessageEnvelope, skipSenderList ...ne
 	destNodes := make([]network.IpPortPair, 0)
 	destNodes = gatherNodesToSendTo(n, destNodes, n.DepthVision)
 	logging.LogDebug("nodes to send message %v to %v", env.Type, destNodes)
-	network.SendToMultipleDest(b, destNodes, skipSenderList, time.Duration(n.DeathTimer))
+	n.Stat.SendErrors += network.SendToMultipleDest(b, destNodes, skipSenderList, time.Duration(n.DeathTimer))
 }
 
 func findNodeByIpPortPairInNode(node *Node, ipp network.IpPortPair, layer uint8) *Node {

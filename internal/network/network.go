@@ -60,7 +60,8 @@ func SendToDest(msg json.RawMessage, dest IpPortPair, timeoutInSecs time.Duratio
 	return nil
 }
 
-func SendToMultipleDest(msg json.RawMessage, dests []IpPortPair, skipDests []IpPortPair, timeoutInSecs time.Duration) {
+func SendToMultipleDest(msg json.RawMessage, dests []IpPortPair, skipDests []IpPortPair, timeoutInSecs time.Duration) (sendErrors uint64) {
+	sendErrors = 0
 	for i := range dests {
 		d := dests[i]
 
@@ -73,8 +74,10 @@ func SendToMultipleDest(msg json.RawMessage, dests []IpPortPair, skipDests []IpP
 
 		if err := SendToDest(msg, d, timeoutInSecs); err != nil {
 			logging.LogError("could not forward message - %s", err)
+			sendErrors++
 			continue
 		}
 		logging.LogDebug("forwarded message to node: %s", d.NetString())
 	}
+	return sendErrors
 }

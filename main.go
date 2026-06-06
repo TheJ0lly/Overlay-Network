@@ -28,7 +28,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		Ip:   parsedIp,
 		Port: uint16(*connectionPort),
 	}
-	initialTimestamp := time.Now().UnixMilli()
+	initialTimestamp := time.Now()
 	var env message.MessageEnvelope
 	var b []byte
 	var err error
@@ -39,8 +39,9 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 		message.NetNewNodeJoinQuery,
 		&message.NetNewNodeJoinQueryMessage{
 			NewNode:   currNode.GetIpPortPair(),
-			Timestamp: initialTimestamp,
+			Timestamp: initialTimestamp.UnixMilli(),
 		},
+		currNode.GetIpPortPair(),
 		currNode.GetIpPortPair(),
 	); err != nil {
 		logging.LogErrorWithExit("could not create join query message - %s", err)
@@ -63,7 +64,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 
 	timeoutChan := make(chan struct{}, 1)
 	go func() {
-		time.Sleep(time.Second * 10)
+		time.Sleep(time.Second * 5)
 		timeoutChan <- struct{}{}
 		list.Close()
 	}()
@@ -110,10 +111,10 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 				continue
 			}
 
-			rttDuration := msg.Timestamp - initialTimestamp
-			if rttDuration <= 0 {
-				// a predefined 10 milliseconds mock RTT
-				rttDuration = 10
+			rttDuration := time.Since(initialTimestamp)
+			var rttValueMilli int64 = 1
+			if rttDuration.Milliseconds() != 0 {
+				rttValueMilli = rttDuration.Milliseconds()
 			}
 
 			responsiveNodes = append(responsiveNodes, ResponiveNode{
@@ -121,8 +122,12 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 					Ip:   msg.NewNode.Ip,
 					Port: msg.NewNode.Port,
 				},
-				rttDuration: rttDuration,
+				rttDuration: rttValueMilli,
 			})
+
+			logging.LogDebug("new response from %v with RTT: %v", responsiveNodes[len(responsiveNodes)-1].pair, responsiveNodes[len(responsiveNodes)-1].rttDuration)
+
+			currNode.Stat.JoinCandidateResponses++
 		}
 	}
 
@@ -136,7 +141,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			// As of now does not matter, but maybe we add some RTT exclusion over X
 			IsSuitable: true,
 		},
-		currNode.GetIpPortPair())
+		currNode.GetIpPortPair(), currNode.GetIpPortPair())
 
 	if err != nil {
 		logging.LogErrorWithExit("could not create message envelope for join confirm: %s", err)
@@ -220,6 +225,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			logging.LogInfo("candidate node %v refused attachment - moving on", responsiveNodes[i].pair)
 			conn.Close()
 			list.Close()
+			currNode.Stat.JoinCandidateRejects++
 			continue
 		}
 
@@ -260,6 +266,7 @@ func JoinNewNetwork(currNode *node.Node, connectionIp *string, connectionPort *u
 			Ip:   net.ParseIP(*ip),
 			Port: uint16(*port),
 		},
+		currNode.GetIpPortPair(),
 	); err != nil {
 		logging.LogErrorWithExit("could not create the join message envelope: %s", err)
 	} else {

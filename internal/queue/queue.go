@@ -30,10 +30,15 @@ func (mq *MessageQueue[T]) Wait() {
 	<-mq.notify
 }
 
-func (mq *MessageQueue[T]) PopFront() T {
+func (mq *MessageQueue[T]) PopFront() (T, error) {
+	var zeroT T
+	if len(mq.q) == 0 {
+		return zeroT, fmt.Errorf("empty queue")
+	}
+
 	toret := mq.q[0]
 	mq.q = slices.Delete(mq.q, 0, 1)
-	return toret
+	return toret, nil
 }
 
 func (mq *MessageQueue[T]) LookFront() T {

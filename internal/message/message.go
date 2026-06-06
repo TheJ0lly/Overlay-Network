@@ -39,9 +39,10 @@ func (mt MessageType) String() string {
 
 // MessageEnvelope covers the message such that it will be easier to find out what message type it contains.
 type MessageEnvelope struct {
-	Type   MessageType        `json:"Type"`
-	Data   json.RawMessage    `json:"Data"`
-	Sender network.IpPortPair `json:"Sender"`
+	Type           MessageType        `json:"Type"`
+	Data           json.RawMessage    `json:"Data"`
+	Sender         network.IpPortPair `json:"Sender"`
+	OriginalSender network.IpPortPair `json:"OriginalSender"`
 }
 
 // SerializeMessageEnvelope takes a message envelope and turns it into a byte slice.
@@ -58,7 +59,7 @@ type SerializableMessage interface {
 	Serialize() ([]byte, error)
 }
 
-func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender network.IpPortPair) (MessageEnvelope, error) {
+func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender network.IpPortPair, ogSender network.IpPortPair) (MessageEnvelope, error) {
 	if b, err := msg.Serialize(); err != nil {
 		return MessageEnvelope{}, fmt.Errorf("failed to marshal message - %s", err)
 	} else {
@@ -70,7 +71,7 @@ func CreateMessageEnvelope(mt MessageType, msg SerializableMessage, sender netwo
 	}
 }
 
-func SerializeNewMessageEnvelope(mt MessageType, msg SerializableMessage, sender network.IpPortPair) ([]byte, error) {
+func SerializeNewMessageEnvelope(mt MessageType, msg SerializableMessage, sender network.IpPortPair, ogSender network.IpPortPair) ([]byte, error) {
 	if b, err := msg.Serialize(); err != nil {
 		return nil, fmt.Errorf("failed to serialize message data - %s", err)
 	} else {

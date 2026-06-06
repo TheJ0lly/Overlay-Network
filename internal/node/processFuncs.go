@@ -10,7 +10,7 @@ import (
 	"github.com/TheJ0lly/Overlay-Network/internal/network"
 )
 
-func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender network.IpPortPair) {
+func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, sender network.IpPortPair, ogSender network.IpPortPair) {
 	newNode, err := Create(msg.JoiningNode.Ip.String(), msg.JoiningNode.Port, msg.JoiningNodeConnCap, 0)
 	if err != nil {
 		logging.LogError("failed to create new node object: %s", err)
@@ -30,11 +30,13 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 			message.NetNewNodeJoin,
 			msg,
 			n.GetIpPortPair(),
+			ogSender,
 		)
 		if err != nil {
 			logging.LogError("failed to serialize response to net join message - %s", err)
 			return
 		}
+		n.Stat.MessagesForwarded[env.Type.String()]++
 
 		go n.ForwardMessage(
 			&env,
@@ -59,6 +61,7 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 			if replacedNode := n.replaceFirstDeadNode(newNode); replacedNode != nil {
 				// Here we should forward an update message to update the connections of the new node
 				logging.LogDebug("replacing dead node %v with node %v", replacedNode, newNode.GetIpPortPair())
+				n.Stat.NodesReplaced++
 				msg.ReplacedNode = *replacedNode
 			}
 		} else {
@@ -82,15 +85,12 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 	} else {
 		// If there is a replced node, it means we must find the node and replace its data
 		if !network.CompareIpPortPair(network.NullIpPortPair, msg.ReplacedNode) {
-			logging.LogDebug("MATEI we have a replaced node in the message")
 			if replacedNode := findNodeByIpPortPairInNode(n, msg.ReplacedNode, attachedNode.DepthVision); replacedNode != nil {
-				logging.LogDebug("MATEI replacing dead node %v with node %v", replacedNode.GetIpPortPair(), newNode.GetIpPortPair())
 				replacedNode.Ip = newNode.Ip
 				replacedNode.Port = newNode.Port
 				con := make([]*Node, 0, cap(newNode.Conns))
 				con = append(con, replacedNode.Conns...)
 				replacedNode.Conns = con
-				logging.LogDebug("MATEI new node: %s", replacedNode)
 			}
 		} else {
 			attachedNode.Conns = append(attachedNode.Conns, newNode)
@@ -103,11 +103,13 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		message.NetNewNodeJoin,
 		msg,
 		n.GetIpPortPair(),
+		ogSender,
 	)
 	if err != nil {
 		logging.LogError("failed to serialize response to net join message - %s", err)
 		return
 	}
+	n.Stat.MessagesForwarded[env.Type.String()]++
 
 	go n.ForwardMessage(
 		&env,
@@ -130,7 +132,7 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 		Conns:       updatedNodeConns,
 	}
 
-	env, err = message.CreateMessageEnvelope(message.NetUpdate, &updateMsg, n.GetIpPortPair())
+	env, err = message.CreateMessageEnvelope(message.NetUpdate, &updateMsg, n.GetIpPortPair(), ogSender)
 	if err != nil {
 		logging.LogError("failed to create update message for new node - %s", err)
 		return
@@ -140,7 +142,7 @@ func (n *Node) processNetNewNodeJoinMessage(msg *message.NetNewNodeJoinMessage, 
 	n.Queue.Notify()
 }
 
-func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender network.IpPortPair) {
+func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMessage, sender network.IpPortPair, ogSender network.IpPortPair) {
 	var b []byte
 	var err error
 
@@ -152,6 +154,7 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 			Timestamp: time.Now().UnixMilli(),
 		},
 		n.GetIpPortPair(),
+		ogSender,
 	); err != nil {
 		logging.LogError("cannot marshal query response - will not proceed with new node query")
 		return
@@ -167,6 +170,8 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 		return
 	}
 
+	n.Stat.MessagesForwarded[message.NetNewNodeJoinQuery.String()]++
+
 	// We put both the original sender(the node who's joining) and the one possibly forwards the message to us.
 	// In the case of receiving the message directly from the joining node, the last 2 senders are the same.
 	go n.ForwardMessage(
@@ -180,7 +185,7 @@ func (n *Node) processNetNewNodeQueryMessage(msg *message.NetNewNodeJoinQueryMes
 	)
 }
 
-func (n *Node) processNetLifeLineMessage(msg message.NetLifeLineMessage, sender network.IpPortPair) {
+func (n *Node) processNetLifeLineMessage(msg message.NetLifeLineMessage, sender network.IpPortPair, ogSender network.IpPortPair) {
 	var nd *Node
 	if nd = findNodeByIpPortPairInNode(n, msg.Node, n.DepthVision); nd == nil {
 		logging.LogDebug("could not find node: %s", msg.Node.NetString())
@@ -190,15 +195,16 @@ func (n *Node) processNetLifeLineMessage(msg message.NetLifeLineMessage, sender 
 	}
 	logging.LogDebug("received lifeline for node: %s", sender.NetString())
 
-	if env, err := message.CreateMessageEnvelope(message.NetLifeLine, &msg, n.GetIpPortPair()); err != nil {
+	if env, err := message.CreateMessageEnvelope(message.NetLifeLine, &msg, n.GetIpPortPair(), ogSender); err != nil {
 		logging.LogError("could not recreate death announcement envelope: %s", err)
 	} else {
+		n.Stat.MessagesForwarded[env.Type.String()]++
 		go n.ForwardMessage(&env, sender)
 	}
 
 }
 
-func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncementMessage, sender network.IpPortPair) {
+func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncementMessage, sender network.IpPortPair, ogSender network.IpPortPair) {
 	for i := range msg.DeadNodes {
 		deadNode := msg.DeadNodes[i]
 		if node := findNodeByIpPortPairInNode(n, deadNode, n.DepthVision); node != nil {
@@ -208,14 +214,15 @@ func (n *Node) processDeathAnnouncementMessage(msg *message.NetDeathAnnouncement
 		logging.LogDebug("the dead node %v is not known", deadNode)
 	}
 
-	if env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, msg, n.GetIpPortPair()); err != nil {
+	if env, err := message.CreateMessageEnvelope(message.NetDeathAnnouncement, msg, n.GetIpPortPair(), ogSender); err != nil {
 		logging.LogError("could not recreate death announcement envelope: %s", err)
 	} else {
+		n.Stat.MessagesForwarded[env.Type.String()]++
 		go n.ForwardMessage(&env, sender)
 	}
 }
 
-func (n *Node) processNetNewNodeJoinConfirmMessage(sender network.IpPortPair) {
+func (n *Node) processNetNewNodeJoinConfirmMessage(sender network.IpPortPair, ogSender network.IpPortPair) {
 	confirmMessageData := message.NetNewNodeJoinConfirmMessage{
 		IsSuitable: true,
 	}
@@ -234,7 +241,7 @@ func (n *Node) processNetNewNodeJoinConfirmMessage(sender network.IpPortPair) {
 
 	var err error
 	var b []byte
-	if b, err = message.SerializeNewMessageEnvelope(message.NetNewNodeJoinConfirm, &confirmMessageData, n.GetIpPortPair()); err != nil {
+	if b, err = message.SerializeNewMessageEnvelope(message.NetNewNodeJoinConfirm, &confirmMessageData, n.GetIpPortPair(), ogSender); err != nil {
 		logging.LogError("could not create join confirm envelope: %s", err)
 		return
 	}
@@ -245,9 +252,12 @@ func (n *Node) processNetNewNodeJoinConfirmMessage(sender network.IpPortPair) {
 	}
 	n.Stat.JoinQueriesOngoing = append(n.Stat.JoinQueriesOngoing, sender)
 	logging.LogDebug("sent confirm message with isSuitable=%v", confirmMessageData.IsSuitable)
+	if !confirmMessageData.IsSuitable {
+		n.Stat.NewNodeRejects++
+	}
 }
 
-func (n *Node) processNetUpdateMessage(msg message.NetUpdateMessage, sender network.IpPortPair) {
+func (n *Node) processNetUpdateMessage(msg message.NetUpdateMessage, sender network.IpPortPair, ogSender network.IpPortPair) {
 	updatedNode := findNodeByIpPortPairInNode(n, msg.UpdatedNode, n.DepthVision)
 	if updatedNode == nil {
 		logging.LogInfo("could not find the updated node")
@@ -259,11 +269,11 @@ func (n *Node) processNetUpdateMessage(msg message.NetUpdateMessage, sender netw
 		logging.LogInfo("targeted node state after: %s", updatedNode)
 	}
 
-	env, err := message.CreateMessageEnvelope(message.NetUpdate, &msg, n.GetIpPortPair())
+	env, err := message.CreateMessageEnvelope(message.NetUpdate, &msg, n.GetIpPortPair(), ogSender)
 	if err != nil {
 		logging.LogError("could not create update envelope: %s", err)
 		return
 	}
-
+	n.Stat.MessagesForwarded[env.Type.String()]++
 	go n.ForwardMessage(&env, sender)
 }
